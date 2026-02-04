@@ -99,126 +99,187 @@ async function run() {
       console.log('Could not read findings file');
       return;
     }
-    
-    if (newFindings.length === 0) {
-      return;
+
+    function normalizeSeverity(value) {
+      return String(value || '').toUpperCase();
     }
-    
-    // Get the PR diff to map file lines to diff positions
-    const prFiles = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/files?per_page=100`);
-    
-    // Create a map of file paths to their diff information
-    const fileMap = {};
-    prFiles.forEach(file => {
-      fileMap[file.filename] = file;
-    });
-    
+
+    function countSeverities(findings) {
+      let high = 0;
+      let medium = 0;
+      let low = 0;
+
+      for (const finding of findings) {
+        const severity = normalizeSeverity(finding.severity || 'HIGH');
+        if (severity === 'HIGH') {
+          high += 1;
+        } else if (severity === 'MEDIUM') {
+          medium += 1;
+        } else if (severity === 'LOW') {
+          low += 1;
+        }
+      }
+
+      return { high, medium, low };
+    }
+
+    function buildReviewSummary(findings) {
+      const total = findings.length;
+      const files = new Set();
+      for (const finding of findings) {
+        const file = finding.file || finding.path;
+        if (file) {
+          files.add(file);
+        }
+      }
+
+      const { high, medium, low } = countSeverities(findings);
+      let summaryLine;
+
+      if (total === 0) {
+        summaryLine = 'Summary: No findings were reported.';
+      } else {
+        const fileCount = files.size;
+        const fileText = fileCount > 0 ? ` across ${fileCount} file${fileCount === 1 ? '' : 's'}` : '';
+        summaryLine = `Summary: ${total} finding${total === 1 ? '' : 's'}${fileText} (HIGH: ${high}, MEDIUM: ${medium}, LOW: ${low}).`;
+      }
+
+      let assessmentLine;
+      if (high > 0) {
+        assessmentLine = 'Assessment: High-severity issues were found that should be addressed before merge.';
+      } else if (total > 0) {
+        assessmentLine = 'Assessment: Changes look acceptable overall; consider addressing the findings.';
+      } else {
+        assessmentLine = 'Assessment: Changes look good; no high-severity issues detected.';
+      }
+
+      return `${summaryLine}\n${assessmentLine}`;
+    }
+
+    const { high: highSeverityCount } = countSeverities(newFindings);
+    const reviewEvent = highSeverityCount > 0 ? 'REQUEST_CHANGES' : 'APPROVE';
+    const reviewBody = buildReviewSummary(newFindings);
+
     // Prepare review comments
     const reviewComments = [];
-    
+
     // Check if ClaudeCode comments should be silenced
     const silenceClaudeCodeComments = process.env.SILENCE_CLAUDECODE_COMMENTS === 'true';
-    
+
     if (silenceClaudeCodeComments) {
-      console.log(`ClaudeCode comments silenced - excluding ${newFindings.length} findings from comments`);
-      return;
+      console.log(`ClaudeCode comments silenced - excluding ${newFindings.length} findings from inline comments`);
     }
-    
-    
-    // Process findings synchronously (gh cli doesn't support async well)
-    for (const finding of newFindings) {
-      const file = finding.file || finding.path;
-      const line = finding.line || (finding.start && finding.start.line) || 1;
-      const message = finding.description || (finding.extra && finding.extra.message) || 'Issue detected';
-      const title = finding.title || message;
-      const severity = finding.severity || 'HIGH';
-      const category = finding.category || 'review_issue';
 
-      // Check if this file is part of the PR diff
-      if (!fileMap[file]) {
-        console.log(`File ${file} not in PR diff, skipping`);
-        continue;
+    let fileMap = {};
+    if (!silenceClaudeCodeComments && newFindings.length > 0) {
+      // Get the PR diff to map file lines to diff positions
+      const prFiles = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/files?per_page=100`);
+
+      // Create a map of file paths to their diff information
+      fileMap = {};
+      prFiles.forEach(file => {
+        fileMap[file.filename] = file;
+      });
+
+      // Process findings synchronously (gh cli doesn't support async well)
+      for (const finding of newFindings) {
+        const file = finding.file || finding.path;
+        const line = finding.line || (finding.start && finding.start.line) || 1;
+        const message = finding.description || (finding.extra && finding.extra.message) || 'Issue detected';
+        const title = finding.title || message;
+        const severity = finding.severity || 'HIGH';
+        const category = finding.category || 'review_issue';
+
+        // Check if this file is part of the PR diff
+        if (!fileMap[file]) {
+          console.log(`File ${file} not in PR diff, skipping`);
+          continue;
+        }
+
+        // Build the comment body
+        let commentBody = `🤖 **Code Review Finding: ${title}**\n\n`;
+        commentBody += `**Severity:** ${severity}\n`;
+        commentBody += `**Category:** ${category}\n`;
+
+        const extraMetadata = (finding.extra && finding.extra.metadata) || {};
+
+        // Add impact/exploit scenario if available
+        if (finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario) {
+          const impact = finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario;
+          commentBody += `\n**Impact:** ${impact}\n`;
+        }
+
+        // Add recommendation if available
+        const recommendation = finding.recommendation || extraMetadata.recommendation;
+        if (recommendation) {
+          commentBody += `\n**Recommendation:** ${recommendation}\n`;
+        }
+
+        // Add GitHub suggestion block if a code suggestion is available
+        const suggestion = finding.suggestion || extraMetadata.suggestion;
+        if (suggestion) {
+          commentBody += `\n\`\`\`suggestion\n${suggestion}\n\`\`\`\n`;
+        }
+
+        // Prepare the review comment
+        const reviewComment = {
+          path: file,
+          line: line,
+          side: 'RIGHT',
+          body: commentBody
+        };
+
+        // Handle multi-line suggestions by adding start_line
+        const suggestionStartLine = finding.suggestion_start_line || extraMetadata.suggestion_start_line;
+        const suggestionEndLine = finding.suggestion_end_line || extraMetadata.suggestion_end_line;
+
+        if (suggestion && suggestionStartLine && suggestionEndLine && suggestionStartLine !== suggestionEndLine) {
+          // Multi-line suggestion: start_line is the first line, line is the last line
+          reviewComment.start_line = suggestionStartLine;
+          reviewComment.line = suggestionEndLine;
+          reviewComment.start_side = 'RIGHT';
+        }
+
+        reviewComments.push(reviewComment);
       }
-
-      // Build the comment body
-      let commentBody = `🤖 **Code Review Finding: ${title}**\n\n`;
-      commentBody += `**Severity:** ${severity}\n`;
-      commentBody += `**Category:** ${category}\n`;
-
-      const extraMetadata = (finding.extra && finding.extra.metadata) || {};
-
-      // Add impact/exploit scenario if available
-      if (finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario) {
-        const impact = finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario;
-        commentBody += `\n**Impact:** ${impact}\n`;
-      }
-
-      // Add recommendation if available
-      const recommendation = finding.recommendation || extraMetadata.recommendation;
-      if (recommendation) {
-        commentBody += `\n**Recommendation:** ${recommendation}\n`;
-      }
-
-      // Add GitHub suggestion block if a code suggestion is available
-      const suggestion = finding.suggestion || extraMetadata.suggestion;
-      if (suggestion) {
-        commentBody += `\n\`\`\`suggestion\n${suggestion}\n\`\`\`\n`;
-      }
-
-      // Prepare the review comment
-      const reviewComment = {
-        path: file,
-        line: line,
-        side: 'RIGHT',
-        body: commentBody
-      };
-
-      // Handle multi-line suggestions by adding start_line
-      const suggestionStartLine = finding.suggestion_start_line || extraMetadata.suggestion_start_line;
-      const suggestionEndLine = finding.suggestion_end_line || extraMetadata.suggestion_end_line;
-
-      if (suggestion && suggestionStartLine && suggestionEndLine && suggestionStartLine !== suggestionEndLine) {
-        // Multi-line suggestion: start_line is the first line, line is the last line
-        reviewComment.start_line = suggestionStartLine;
-        reviewComment.line = suggestionEndLine;
-        reviewComment.start_side = 'RIGHT';
-      }
-
-      reviewComments.push(reviewComment);
     }
-    
+
     if (reviewComments.length === 0) {
-      console.log('No findings to comment on PR diff');
-      return;
+      console.log('No inline comments to add; posting summary review only');
     }
-    
-    // Check for existing review comments to avoid duplicates
-    const comments = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/comments`);
-    
-    // Check if we've already commented on these findings
-    const existingSecurityComments = comments.filter(comment => 
-      comment.user.type === 'Bot' && 
-      comment.body && (
-        comment.body.includes('🤖 **Security Issue:') ||
-        comment.body.includes('🤖 **Code Review Finding:')
-      )
-    );
-    
-    if (existingSecurityComments.length > 0) {
-      console.log(`Found ${existingSecurityComments.length} existing security comments, skipping to avoid duplicates`);
-      return;
+
+    if (reviewComments.length > 0) {
+      // Check for existing review comments to avoid duplicates
+      const comments = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/comments`);
+
+      // Check if we've already commented on these findings
+      const existingSecurityComments = comments.filter(comment =>
+        comment.user.type === 'Bot' &&
+        comment.body && (
+          comment.body.includes('🤖 **Security Issue:') ||
+          comment.body.includes('🤖 **Code Review Finding:')
+        )
+      );
+
+      if (existingSecurityComments.length > 0) {
+        console.log(`Found ${existingSecurityComments.length} existing security comments, skipping to avoid duplicates`);
+        return;
+      }
     }
-        
+
     try {
       // Create a review with all the comments
       const reviewData = {
         commit_id: context.payload.pull_request.head.sha,
-        event: 'COMMENT',
-        comments: reviewComments
+        event: reviewEvent,
+        body: reviewBody
       };
+      if (reviewComments.length > 0) {
+        reviewData.comments = reviewComments;
+      }
       
       const reviewResponse = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`, 'POST', reviewData);
-      
+
       console.log(`Created review with ${reviewComments.length} inline comments`);
       
       // Add reactions to the comments

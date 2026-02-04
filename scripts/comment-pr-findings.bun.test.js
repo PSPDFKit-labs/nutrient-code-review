@@ -85,6 +85,13 @@ describe('comment-pr-findings.js', () => {
         }
       });
 
+      spawnSyncSpy.mockImplementation((cmd, args) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
       await import('./comment-pr-findings.js');
       
       expect(readFileSyncSpy).toHaveBeenCalledWith(expect.stringContaining('github-event.json'), 'utf8');
@@ -112,15 +119,46 @@ describe('comment-pr-findings.js', () => {
       await import('./comment-pr-findings.js');
       
       expect(consoleLogSpy).toHaveBeenCalledWith('Could not read findings file');
-      expect(spawnSyncSpy).not.toHaveBeenCalled();
     });
 
-    test('should exit early when findings array is empty', async () => {
-      readFileSyncSpy.mockReturnValue('[]');
+    test('should post summary review when findings array is empty', async () => {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: {
+              number: 123,
+              head: { sha: 'abc123' }
+            }
+          });
+        }
+        if (path === 'findings.json') {
+          return '[]';
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              reviewDataCaptured = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
 
       await import('./comment-pr-findings.js');
-      
-      expect(spawnSyncSpy).not.toHaveBeenCalled();
+
+      expect(reviewDataCaptured).toBeTruthy();
+      expect(reviewDataCaptured.event).toBe('APPROVE');
+      expect(reviewDataCaptured.body).toContain('Summary: No findings were reported.');
+      expect(reviewDataCaptured.body).toContain('Assessment:');
     });
 
     test('should process findings correctly', async () => {
@@ -192,6 +230,128 @@ describe('comment-pr-findings.js', () => {
       // Verify review data was captured
       expect(reviewDataCaptured).toBeTruthy();
       expect(reviewDataCaptured.comments).toHaveLength(1);
+      expect(reviewDataCaptured.event).toBe('REQUEST_CHANGES');
+      expect(reviewDataCaptured.body).toContain('Summary: 1 finding');
+      expect(reviewDataCaptured.body).toContain('Assessment:');
+    });
+
+    test('should approve when findings are medium or low only', async () => {
+      const mockFindings = [
+        {
+          file: 'alpha.py',
+          line: 5,
+          description: 'Potential edge case',
+          severity: 'MEDIUM',
+          category: 'correctness'
+        },
+        {
+          file: 'beta.py',
+          line: 12,
+          description: 'Minor perf issue',
+          severity: 'LOW',
+          category: 'performance'
+        }
+      ];
+
+      const mockPrFiles = [
+        { filename: 'alpha.py', patch: '@@ -1,1 +1,1 @@' },
+        { filename: 'beta.py', patch: '@@ -1,1 +1,1 @@' }
+      ];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: {
+              number: 123,
+              head: { sha: 'abc123' }
+            }
+          });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(mockFindings);
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+            return { status: 0, stdout: '[]', stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              reviewDataCaptured = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured).toBeTruthy();
+      expect(reviewDataCaptured.event).toBe('APPROVE');
+      expect(reviewDataCaptured.body).toContain('Summary: 2 findings');
+      expect(reviewDataCaptured.body).toContain('HIGH: 0');
+      expect(reviewDataCaptured.comments).toHaveLength(2);
+    });
+
+    test('should post summary review when comments are silenced', async () => {
+      process.env.SILENCE_CLAUDECODE_COMMENTS = 'true';
+
+      const mockFindings = [{
+        file: 'app.py',
+        line: 3,
+        description: 'Risky behavior',
+        severity: 'HIGH',
+        category: 'security'
+      }];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: {
+              number: 123,
+              head: { sha: 'abc123' }
+            }
+          });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(mockFindings);
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              reviewDataCaptured = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured).toBeTruthy();
+      expect(reviewDataCaptured.event).toBe('REQUEST_CHANGES');
+      expect(reviewDataCaptured.body).toContain('Summary: 1 finding');
+      expect(reviewDataCaptured.comments).toBeUndefined();
     });
   });
 
@@ -685,7 +845,7 @@ describe('comment-pr-findings.js', () => {
 
       await import('./comment-pr-findings.js');
       expect(consoleLogSpy).toHaveBeenCalledWith('File not-in-diff.py not in PR diff, skipping');
-      expect(consoleLogSpy).toHaveBeenCalledWith('No findings to comment on PR diff');
+      expect(consoleLogSpy).toHaveBeenCalledWith('No inline comments to add; posting summary review only');
     });
   });
 });
