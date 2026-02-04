@@ -63,6 +63,11 @@ inputs:
     required: false
     default: 'true'
 
+  require-label:
+    description: 'Only run review if this label is present on the PR. Leave empty to review all PRs. To trigger on label addition, add "labeled" to your workflow pull_request types.'
+    required: false
+    default: ''
+
 outputs:
   findings-count:
     description: 'Number of code review findings'
@@ -106,6 +111,8 @@ runs:
         RUN_EVERY_COMMIT: ${{ inputs.run-every-commit }}
         SKIP_DRAFT_PRS: ${{ inputs.skip-draft-prs }}
         IS_DRAFT: ${{ github.event.pull_request.draft }}
+        REQUIRE_LABEL: ${{ inputs.require-label }}
+        PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
       run: |
         # Check if ClaudeCode should be enabled
         ENABLE_CLAUDECODE="true"
@@ -116,13 +123,23 @@ runs:
           PR_NUMBER="$PR_NUMBER"
           CACHE_HIT="${{ steps.claudecode-history.outputs.cache-hit }}"
 
+          # Check if required label is present
+          if [ -n "$REQUIRE_LABEL" ]; then
+            if echo "$PR_LABELS" | jq -e --arg label "$REQUIRE_LABEL" 'index($label) != null' > /dev/null 2>&1; then
+              echo "Required label '$REQUIRE_LABEL' found on PR #$PR_NUMBER"
+            else
+              echo "Skipping code review: required label '$REQUIRE_LABEL' not found on PR #$PR_NUMBER"
+              ENABLE_CLAUDECODE="false"
+            fi
+          fi
+
           # Skip draft PRs if configured
-          if [ "$SKIP_DRAFT_PRS" == "true" ] && [ "$IS_DRAFT" == "true" ]; then
+          if [ "$ENABLE_CLAUDECODE" == "true" ] && [ "$SKIP_DRAFT_PRS" == "true" ] && [ "$IS_DRAFT" == "true" ]; then
             echo "Skipping code review for draft PR #$PR_NUMBER"
             ENABLE_CLAUDECODE="false"
           # Now check cache - if ClaudeCode has already run, disable unless run-every-commit is true
           # Check if marker file exists (cache may have been restored from a different SHA)
-          elif [ "$RUN_EVERY_COMMIT" != "true" ] && [ -f ".claudecode-marker/marker.json" ]; then
+          elif [ "$ENABLE_CLAUDECODE" == "true" ] && [ "$RUN_EVERY_COMMIT" != "true" ] && [ -f ".claudecode-marker/marker.json" ]; then
             echo "ClaudeCode has already run on PR #$PR_NUMBER (found marker file), forcing disable to avoid false positives"
             ENABLE_CLAUDECODE="false"
           elif [ "$RUN_EVERY_COMMIT" == "true" ] && [ -f ".claudecode-marker/marker.json" ]; then
