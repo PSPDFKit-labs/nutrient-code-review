@@ -53,6 +53,16 @@ inputs:
     required: false
     default: ''
 
+  dismiss-stale-reviews:
+    description: 'Dismiss previous bot reviews when posting a new review (useful for follow-up commits). If false, skips posting when existing review comments are found.'
+    required: false
+    default: 'true'
+
+  skip-draft-prs:
+    description: 'Skip code review on draft pull requests'
+    required: false
+    default: 'true'
+
 outputs:
   findings-count:
     description: 'Number of code review findings'
@@ -94,19 +104,25 @@ runs:
       env:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         RUN_EVERY_COMMIT: ${{ inputs.run-every-commit }}
+        SKIP_DRAFT_PRS: ${{ inputs.skip-draft-prs }}
+        IS_DRAFT: ${{ github.event.pull_request.draft }}
       run: |
         # Check if ClaudeCode should be enabled
         ENABLE_CLAUDECODE="true"
         SILENCE_CLAUDECODE_COMMENTS="false"
-        
+
         # For PRs, check sampling and cache
         if [ "${{ github.event_name }}" == "pull_request" ]; then
           PR_NUMBER="$PR_NUMBER"
           CACHE_HIT="${{ steps.claudecode-history.outputs.cache-hit }}"
 
+          # Skip draft PRs if configured
+          if [ "$SKIP_DRAFT_PRS" == "true" ] && [ "$IS_DRAFT" == "true" ]; then
+            echo "Skipping code review for draft PR #$PR_NUMBER"
+            ENABLE_CLAUDECODE="false"
           # Now check cache - if ClaudeCode has already run, disable unless run-every-commit is true
           # Check if marker file exists (cache may have been restored from a different SHA)
-          if [ "$RUN_EVERY_COMMIT" != "true" ] && [ -f ".claudecode-marker/marker.json" ]; then
+          elif [ "$RUN_EVERY_COMMIT" != "true" ] && [ -f ".claudecode-marker/marker.json" ]; then
             echo "ClaudeCode has already run on PR #$PR_NUMBER (found marker file), forcing disable to avoid false positives"
             ENABLE_CLAUDECODE="false"
           elif [ "$RUN_EVERY_COMMIT" == "true" ] && [ -f ".claudecode-marker/marker.json" ]; then
@@ -330,6 +346,7 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
         CLAUDECODE_FINDINGS: ${{ steps.claudecode-scan.outputs.findings_count }}
         SILENCE_CLAUDECODE_COMMENTS: ${{ steps.claudecode-check.outputs.silence_claudecode_comments }}
+        DISMISS_STALE_REVIEWS: ${{ inputs.dismiss-stale-reviews }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         node "$ACTION_PATH/scripts/comment-pr-findings.js"
