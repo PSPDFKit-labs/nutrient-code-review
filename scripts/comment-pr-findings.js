@@ -133,19 +133,18 @@ async function run() {
       const title = finding.title || message;
       const severity = finding.severity || 'HIGH';
       const category = finding.category || 'review_issue';
-      
+
       // Check if this file is part of the PR diff
       if (!fileMap[file]) {
         console.log(`File ${file} not in PR diff, skipping`);
         continue;
       }
-      
+
       // Build the comment body
       let commentBody = `🤖 **Code Review Finding: ${title}**\n\n`;
       commentBody += `**Severity:** ${severity}\n`;
       commentBody += `**Category:** ${category}\n`;
-      commentBody += `**Tool:** ClaudeCode AI Review\n`;
-      
+
       const extraMetadata = (finding.extra && finding.extra.metadata) || {};
 
       // Add impact/exploit scenario if available
@@ -153,13 +152,19 @@ async function run() {
         const impact = finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario;
         commentBody += `\n**Impact:** ${impact}\n`;
       }
-      
+
       // Add recommendation if available
-      if (finding.recommendation || extraMetadata.recommendation) {
-        const recommendation = finding.recommendation || extraMetadata.recommendation;
+      const recommendation = finding.recommendation || extraMetadata.recommendation;
+      if (recommendation) {
         commentBody += `\n**Recommendation:** ${recommendation}\n`;
       }
-      
+
+      // Add GitHub suggestion block if a code suggestion is available
+      const suggestion = finding.suggestion || extraMetadata.suggestion;
+      if (suggestion) {
+        commentBody += `\n\`\`\`suggestion\n${suggestion}\n\`\`\`\n`;
+      }
+
       // Prepare the review comment
       const reviewComment = {
         path: file,
@@ -167,7 +172,18 @@ async function run() {
         side: 'RIGHT',
         body: commentBody
       };
-      
+
+      // Handle multi-line suggestions by adding start_line
+      const suggestionStartLine = finding.suggestion_start_line || extraMetadata.suggestion_start_line;
+      const suggestionEndLine = finding.suggestion_end_line || extraMetadata.suggestion_end_line;
+
+      if (suggestion && suggestionStartLine && suggestionEndLine && suggestionStartLine !== suggestionEndLine) {
+        // Multi-line suggestion: start_line is the first line, line is the last line
+        reviewComment.start_line = suggestionStartLine;
+        reviewComment.line = suggestionEndLine;
+        reviewComment.start_side = 'RIGHT';
+      }
+
       reviewComments.push(reviewComment);
     }
     

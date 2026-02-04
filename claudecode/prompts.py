@@ -180,6 +180,9 @@ You MUST output your findings as structured JSON with this exact schema:
       "description": "What is wrong and where it happens",
       "impact": "Concrete impact or failure mode (use exploit scenario for security issues)",
       "recommendation": "Actionable fix or mitigation",
+      "suggestion": "Exact replacement code (optional). Can be multi-line. Must replace lines from suggestion_start_line to suggestion_end_line.",
+      "suggestion_start_line": 42,
+      "suggestion_end_line": 44,
       "confidence": 0.95
     }}
   ],
@@ -191,6 +194,12 @@ You MUST output your findings as structured JSON with this exact schema:
     "review_completed": true
   }}
 }}
+
+SUGGESTION GUIDELINES:
+- Only include `suggestion` if you can provide exact, working replacement code
+- For single-line fixes: set suggestion_start_line = suggestion_end_line = the line number
+- For multi-line fixes: set the range of lines being replaced
+- The suggestion replaces all lines from suggestion_start_line to suggestion_end_line (inclusive)
 
 SEVERITY GUIDELINES:
 - **HIGH**: Likely production bug, data loss, significant regression, or directly exploitable security vulnerability
@@ -343,6 +352,9 @@ You MUST output your findings as structured JSON with this exact schema:
       "description": "What is wrong and where it happens",
       "impact": "Concrete impact or failure mode",
       "recommendation": "Actionable fix or mitigation",
+      "suggestion": "Exact replacement code (optional). Can be multi-line. Must replace lines from suggestion_start_line to suggestion_end_line.",
+      "suggestion_start_line": 42,
+      "suggestion_end_line": 44,
       "confidence": 0.95
     }}
   ],
@@ -354,6 +366,12 @@ You MUST output your findings as structured JSON with this exact schema:
     "review_completed": true
   }}
 }}
+
+SUGGESTION GUIDELINES:
+- Only include `suggestion` if you can provide exact, working replacement code
+- For single-line fixes: set suggestion_start_line = suggestion_end_line = the line number
+- For multi-line fixes: set the range of lines being replaced
+- The suggestion replaces all lines from suggestion_start_line to suggestion_end_line (inclusive)
 
 SEVERITY GUIDELINES:
 - **HIGH**: Likely production bug, data loss, or significant regression
@@ -506,6 +524,9 @@ You MUST output your findings as structured JSON with this exact schema:
       "description": "What is wrong and where it happens",
       "impact": "Exploit scenario or concrete impact",
       "recommendation": "Actionable fix or mitigation",
+      "suggestion": "Exact replacement code (optional). Can be multi-line. Must replace lines from suggestion_start_line to suggestion_end_line.",
+      "suggestion_start_line": 42,
+      "suggestion_end_line": 44,
       "confidence": 0.95
     }}
   ],
@@ -517,6 +538,12 @@ You MUST output your findings as structured JSON with this exact schema:
     "review_completed": true
   }}
 }}
+
+SUGGESTION GUIDELINES:
+- Only include `suggestion` if you can provide exact, working replacement code
+- For single-line fixes: set suggestion_start_line = suggestion_end_line = the line number
+- For multi-line fixes: set the range of lines being replaced
+- The suggestion replaces all lines from suggestion_start_line to suggestion_end_line (inclusive)
 
 SEVERITY GUIDELINES:
 - **HIGH**: Directly exploitable vulnerabilities leading to RCE, data breach, or authentication bypass
