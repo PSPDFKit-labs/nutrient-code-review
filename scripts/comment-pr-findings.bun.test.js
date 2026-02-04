@@ -249,7 +249,7 @@ describe('comment-pr-findings.js', () => {
 
       await import('./comment-pr-findings.js')
       expect(capturedReviewData).toBeDefined();
-      expect(capturedReviewData.comments[0].body).toContain('🤖 **Security Issue: Insecure pickle loads**');
+      expect(capturedReviewData.comments[0].body).toContain('🤖 **Code Review Finding: Insecure pickle loads**');
     });
 
     test('should generate correct yaml.load autofix', async () => {
@@ -305,7 +305,7 @@ describe('comment-pr-findings.js', () => {
 
       await import('./comment-pr-findings.js')
       expect(capturedReviewData).toBeDefined();
-      expect(capturedReviewData.comments[0].body).toContain('🤖 **Security Issue: Unsafe YAML deserialization**');
+      expect(capturedReviewData.comments[0].body).toContain('🤖 **Code Review Finding: Unsafe YAML deserialization**');
     });
 
     test('should preserve indentation in autofix', async () => {
@@ -361,7 +361,7 @@ describe('comment-pr-findings.js', () => {
 
       await import('./comment-pr-findings.js')
       expect(capturedReviewData).toBeDefined();
-      expect(capturedReviewData.comments[0].body).toContain('🤖 **Security Issue: Insecure pickle loads**');
+      expect(capturedReviewData.comments[0].body).toContain('🤖 **Code Review Finding: Insecure pickle loads**');
     });
   });
 
@@ -489,7 +489,7 @@ describe('comment-pr-findings.js', () => {
       expect(capturedReviewData.comments).toHaveLength(1);
       
       const comment = capturedReviewData.comments[0];
-      expect(comment.body).toContain('🤖 **Security Issue:');
+      expect(comment.body).toContain('🤖 **Code Review Finding:');
       expect(comment.body).toContain('**Severity:** HIGH');
       expect(comment.body).toContain('**Category:** security_issue');
       expect(comment.body).toContain('**Tool:** ClaudeCode AI Security Analysis');

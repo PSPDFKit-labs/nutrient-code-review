@@ -181,7 +181,7 @@ index 8901234..5678901 100644
         audit_result.stdout = json.dumps(claude_wrapped_response)
         audit_result.stderr = ''
         
-        # The audit might be retried, so provide the same result twice
+        # Provide results for general and security passes
         mock_run.side_effect = [version_result, audit_result, audit_result]
         
         # Run the workflow
@@ -203,7 +203,7 @@ index 8901234..5678901 100644
         
         # Verify API calls
         assert mock_get.call_count == 3
-        assert mock_run.call_count == 2
+        assert mock_run.call_count == 3
         
         # Verify the audit was run with proper prompt
         audit_call = mock_run.call_args_list[1]
@@ -261,7 +261,8 @@ index 8901234..5678901 100644
         
         mock_run.side_effect = [
             Mock(returncode=0, stdout='claude version 1.0.0', stderr=''),
-            Mock(returncode=0, stdout=json.dumps({"findings": claude_findings}), stderr='')
+            Mock(returncode=0, stdout=json.dumps({"findings": claude_findings}), stderr=''),
+            Mock(returncode=0, stdout=json.dumps({"findings": []}), stderr='')
         ]
         
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -298,8 +299,8 @@ index 8901234..5678901 100644
     
     @patch('subprocess.run')
     @patch('requests.get')
-    def test_workflow_with_no_security_issues(self, mock_get, mock_run):
-        """Test workflow when no security issues are found."""
+    def test_workflow_with_no_review_issues(self, mock_get, mock_run):
+        """Test workflow when no review issues are found."""
         # Setup clean PR
         pr_response = Mock()
         pr_response.json.return_value = {
@@ -337,6 +338,7 @@ index 8901234..5678901 100644
         # Claude finds no issues
         mock_run.side_effect = [
             Mock(returncode=0, stdout='claude version 1.0.0', stderr=''),
+            Mock(returncode=0, stdout='{"findings": [], "analysis_summary": {"review_completed": true}}', stderr=''),
             Mock(returncode=0, stdout='{"findings": [], "analysis_summary": {"review_completed": true}}', stderr='')
         ]
         
@@ -427,6 +429,7 @@ index 0000000..1234567
         # Claude handles it gracefully
         mock_run.side_effect = [
             Mock(returncode=0, stdout='claude version 1.0.0', stderr=''),
+            Mock(returncode=0, stdout='{"findings": []}', stderr=''),
             Mock(returncode=0, stdout='{"findings": []}', stderr='')
         ]
         
@@ -506,6 +509,7 @@ index 1234567..8901234 100644
         
         mock_run.side_effect = [
             Mock(returncode=0, stdout='claude version 1.0.0', stderr=''),
+            Mock(returncode=0, stdout='{"findings": []}', stderr=''),
             Mock(returncode=0, stdout='{"findings": []}', stderr='')
         ]
         

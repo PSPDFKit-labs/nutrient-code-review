@@ -1,10 +1,11 @@
-"""Evaluation engine for running SAST security audits on GitHub PRs."""
+"""Evaluation engine for running code review audits on GitHub PRs."""
 
 import os
 import sys
 import subprocess
 import shutil
 import time
+import tempfile
 import threading
 from typing import Dict, Any, Optional, Tuple, List
 from dataclasses import dataclass, asdict
@@ -41,7 +42,7 @@ class EvalResult:
     success: bool
     runtime_seconds: float
     findings_count: int
-    detected_vulnerabilities: bool
+    detected_issues: bool
     
     # Optional fields
     error_message: str = ""
@@ -54,7 +55,7 @@ class EvalResult:
 
 
 class EvaluationEngine:
-    """Engine for running security evaluations on GitHub PRs."""
+    """Engine for running code review evaluations on GitHub PRs."""
     
     def __init__(self, work_dir: str = None, verbose: bool = False):
         """Initialize evaluation engine.
@@ -63,13 +64,20 @@ class EvaluationEngine:
             work_dir: Directory for cloning repositories
             verbose: Enable verbose logging
         """
-        # Use ~/code/audit as base directory like pr_audit does
+        self.verbose = verbose
+
+        # Use ~/code/audit as base directory like pr_audit does, fall back to /tmp on permission issues
         if work_dir is None:
             work_dir = os.path.expanduser("~/code/audit")
         self.work_dir = work_dir
-        Path(self.work_dir).mkdir(parents=True, exist_ok=True)
-        
-        self.verbose = verbose
+        try:
+            Path(self.work_dir).mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            fallback = os.path.join(tempfile.gettempdir(), "claudecode-audit")
+            Path(fallback).mkdir(parents=True, exist_ok=True)
+            if self.verbose:
+                print(f"[EVAL] Falling back to {fallback} (could not create {self.work_dir}: {e})", file=sys.stderr)
+            self.work_dir = fallback
         self.claude_api_key = os.environ.get('ANTHROPIC_API_KEY', '')
         
         if not self.claude_api_key:
@@ -315,7 +323,7 @@ class EvaluationEngine:
                 self.log(f"Error cleaning up worktree: {e}")
     
     def run_evaluation(self, test_case: EvalCase) -> EvalResult:
-        """Run security evaluation on a single PR.
+        """Run code review evaluation on a single PR.
         
         Args:
             test_case: Test case to evaluate
@@ -336,14 +344,14 @@ class EvaluationEngine:
                 success=False,
                 runtime_seconds=time.time() - start_time,
                 findings_count=0,
-                detected_vulnerabilities=False,
+                detected_issues=False,
                 error_message=f"Repository setup failed: {error_msg}"
             )
         
         try:
-            # Run the SAST audit
-            self.log(f"Running SAST audit on {worktree_path}")
-            audit_success, output, parsed_results, error_message = self._run_sast_audit(test_case, worktree_path)
+            # Run the code review audit
+            self.log(f"Running code review on {worktree_path}")
+            audit_success, output, parsed_results, error_message = self._run_code_review(test_case, worktree_path)
             
             if not audit_success:
                 return EvalResult(
@@ -353,8 +361,8 @@ class EvaluationEngine:
                     success=False,
                     runtime_seconds=time.time() - start_time,
                     findings_count=0,
-                    detected_vulnerabilities=False,
-                    error_message=f"SAST audit failed: {error_message or 'Unknown error'}"
+                    detected_issues=False,
+                    error_message=f"Code review failed: {error_message or 'Unknown error'}"
                 )
             
             # Extract findings from results
@@ -363,7 +371,7 @@ class EvaluationEngine:
                 findings = parsed_results['findings']
             
             findings_count = len(findings)
-            detected_vulnerabilities = findings_count > 0
+            detected_issues = findings_count > 0
             
             # Create findings summary
             findings_summary = []
@@ -384,7 +392,7 @@ class EvaluationEngine:
                 success=True,
                 runtime_seconds=time.time() - start_time,
                 findings_count=findings_count,
-                detected_vulnerabilities=detected_vulnerabilities,
+                detected_issues=detected_issues,
                 findings_summary=findings_summary,
                 full_findings=findings
             )
@@ -393,8 +401,8 @@ class EvaluationEngine:
             # Always clean up the worktree
             self._cleanup_worktree(test_case, worktree_path)
     
-    def _run_sast_audit(self, test_case: EvalCase, repo_path: str) -> Tuple[bool, str, Optional[Dict[str, Any]], Optional[str]]:
-        """Run the SAST audit script on a repository.
+    def _run_code_review(self, test_case: EvalCase, repo_path: str) -> Tuple[bool, str, Optional[Dict[str, Any]], Optional[str]]:
+        """Run the code review script on a repository.
         
         Args:
             test_case: Test case being evaluated
@@ -423,7 +431,7 @@ class EvaluationEngine:
             env['PYTHONPATH'] = str(project_root)
         
         try:
-            self.log(f"Executing SAST audit for PR #{test_case.pr_number}")
+            self.log(f"Executing code review for PR #{test_case.pr_number}")
             result = subprocess.run(
                 [sys.executable, str(script_path)],
                 cwd=repo_path,
@@ -438,11 +446,11 @@ class EvaluationEngine:
             # Parse the JSON output first to see if we got valid results
             success, parsed_results = parse_json_with_fallbacks(output)
             if not success:
-                self.log("Failed to parse SAST audit output as JSON")
+                self.log("Failed to parse code review output as JSON")
                 # If we can't parse JSON and have non-zero exit code, it's a real failure
                 if result.returncode != 0:
                     error_output = result.stderr or output
-                    self.log(f"SAST audit failed with return code {result.returncode}")
+                    self.log(f"Code review failed with return code {result.returncode}")
                     self.log(f"Error output: {error_output[:500]}...")
                     return False, output, None, f"Exit code {result.returncode}: {error_output[:200]}"
                 return False, output, None, "Invalid JSON output"
@@ -451,17 +459,17 @@ class EvaluationEngine:
             # (exit code 1 means high-severity findings were found)
             if result.returncode not in [0, 1]:
                 error_output = result.stderr or output
-                self.log(f"SAST audit failed with unexpected return code {result.returncode}")
+                self.log(f"Code review failed with unexpected return code {result.returncode}")
                 self.log(f"Error output: {error_output[:500]}...")
                 return False, output, None, f"Unexpected exit code {result.returncode}: {error_output[:200]}"
             
             return True, output, parsed_results, None
             
         except subprocess.TimeoutExpired:
-            self.log(f"SAST audit timed out after {TIMEOUT_CLAUDECODE} seconds")
+            self.log(f"Code review timed out after {TIMEOUT_CLAUDECODE} seconds")
             return False, "", None, f"Timeout after {TIMEOUT_CLAUDECODE} seconds"
         except Exception as e:
-            self.log(f"Exception during SAST audit: {e}")
+            self.log(f"Exception during code review: {e}")
             return False, "", None, str(e)
 
 

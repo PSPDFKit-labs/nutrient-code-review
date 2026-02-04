@@ -1,6 +1,6 @@
-name: 'Claude Code Security Reviewer'
-description: 'AI-powered security review GitHub Action using Claude to analyze code changes for security vulnerabilities'
-author: 'Anthropic'
+name: 'Claude Code Reviewer'
+description: 'AI-powered code review GitHub Action using Claude. Runs two focused passes: code quality (correctness, reliability, performance, maintainability, testing) and security.'
+author: 'Nutrient'
 
 inputs:
   comment-pr:
@@ -24,12 +24,12 @@ inputs:
     default: '20'
   
   claude-api-key:
-    description: 'Anthropic Claude API key for security analysis'
+    description: 'Anthropic Claude API key for code review analysis'
     required: true
     default: ''
 
   claude-model:
-    description: 'Claude model to use for security analysis (e.g., claude-sonnet-4-20250514)'
+    description: 'Claude model to use for code review analysis (e.g., claude-sonnet-4-20250514)'
     required: false
     default: ''
 
@@ -43,14 +43,29 @@ inputs:
     required: false
     default: ''
 
-  custom-security-scan-instructions:
-    description: 'Path to custom security scan instructions text file to append to audit prompt'
+  custom-review-instructions:
+    description: 'Path to custom code review instructions text file to append to the audit prompt'
     required: false
     default: ''
 
+  custom-security-scan-instructions:
+    description: 'Path to custom security scan instructions text file to append to the security section (optional)'
+    required: false
+    default: ''
+
+  run-general-review:
+    description: 'Whether to run the code quality review pass (correctness, reliability, performance, maintainability, testing)'
+    required: false
+    default: 'true'
+
+  run-security-review:
+    description: 'Whether to run the dedicated security review pass'
+    required: false
+    default: 'true'
+
 outputs:
   findings-count:
-    description: 'Number of security findings'
+    description: 'Number of code review findings'
     value: ${{ steps.claudecode-scan.outputs.findings_count }}
   
   results-file:
@@ -185,12 +200,15 @@ runs:
         ENABLE_CLAUDE_FILTERING: 'true' 
         EXCLUDE_DIRECTORIES: ${{ inputs.exclude-directories }}
         FALSE_POSITIVE_FILTERING_INSTRUCTIONS: ${{ inputs.false-positive-filtering-instructions }}
+        CUSTOM_REVIEW_INSTRUCTIONS: ${{ inputs.custom-review-instructions }}
         CUSTOM_SECURITY_SCAN_INSTRUCTIONS: ${{ inputs.custom-security-scan-instructions }}
+        RUN_GENERAL_REVIEW: ${{ inputs.run-general-review }}
+        RUN_SECURITY_REVIEW: ${{ inputs.run-security-review }}
         CLAUDE_MODEL: ${{ inputs.claude-model }}
         CLAUDECODE_TIMEOUT: ${{ inputs.claudecode-timeout }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
-        echo "Running ClaudeCode AI security analysis..."
+        echo "Running ClaudeCode AI code review analysis..."
         echo "----------------------------------------"
         
         # Initialize outputs
@@ -207,7 +225,7 @@ runs:
         if [ -z "$ANTHROPIC_API_KEY" ]; then
           echo "::error::ANTHROPIC_API_KEY is not set. Please provide the claude-api-key input to the action."
           echo "Example usage:"
-          echo "  - uses: anthropics/claude-code-security-reviewer@main"
+          echo "  - uses: PSPDFKit-labs/claude-code-review@main"
           echo "    with:"
           echo "      claude-api-key: \$\{{ secrets.ANTHROPIC_API_KEY }}"
           exit 1
@@ -275,7 +293,7 @@ runs:
               CLAUDECODE_FINDINGS_COUNT=$(jq -r '.findings | if . == null then 0 else length end' claudecode/claudecode-results.json 2>/dev/null || echo "0")
               echo "::debug::Extracted ClaudeCode findings count: $CLAUDECODE_FINDINGS_COUNT"
               echo "findings_count=$CLAUDECODE_FINDINGS_COUNT" >> $GITHUB_OUTPUT
-              echo "ClaudeCode found $CLAUDECODE_FINDINGS_COUNT security issues"
+              echo "ClaudeCode found $CLAUDECODE_FINDINGS_COUNT review issues"
               
               # Also create findings.json for PR comment script
               jq '.findings // []' claudecode/claudecode-results.json > findings.json || echo '[]' > findings.json
@@ -309,7 +327,7 @@ runs:
       if: always() && inputs.upload-results == 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: security-review-results
+        name: code-review-results
         path: |
           findings.json
           claudecode-results.json

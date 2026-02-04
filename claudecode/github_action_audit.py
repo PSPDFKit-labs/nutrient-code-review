@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simplified PR Security Audit for GitHub Actions
-Runs Claude Code security audit on current working directory and outputs findings to stdout
+Simplified PR Code Review for GitHub Actions
+Runs Claude Code review on current working directory and outputs findings to stdout
 """
 
 import os
@@ -15,7 +15,7 @@ import re
 import time 
 
 # Import existing components we can reuse
-from claudecode.prompts import get_security_audit_prompt
+from claudecode.prompts import get_code_review_prompt, get_security_review_prompt
 from claudecode.findings_filter import FindingsFilter
 from claudecode.json_parser import parse_json_with_fallbacks
 from claudecode.constants import (
@@ -34,7 +34,7 @@ class ConfigurationError(ValueError):
     pass
 
 class AuditError(ValueError):
-    """Raised when security audit operations fail."""
+    """Raised when code review operations fail."""
     pass
 
 class GitHubActionClient:
@@ -200,12 +200,12 @@ class SimpleClaudeRunner:
         else:
             self.timeout_seconds = SUBPROCESS_TIMEOUT
     
-    def run_security_audit(self, repo_dir: Path, prompt: str) -> Tuple[bool, str, Dict[str, Any]]:
-        """Run Claude Code security audit.
+    def run_code_review(self, repo_dir: Path, prompt: str) -> Tuple[bool, str, Dict[str, Any]]:
+        """Run Claude Code review.
         
         Args:
             repo_dir: Path to repository directory
-            prompt: Security audit prompt
+            prompt: Code review prompt
             
         Returns:
             Tuple of (success, error_message, parsed_results)
@@ -270,8 +270,8 @@ class SimpleClaudeRunner:
                         attempt == 0):
                         continue  # Retry
                     
-                    # Extract security findings
-                    parsed_results = self._extract_security_findings(parsed_result)
+                    # Extract review findings
+                    parsed_results = self._extract_review_findings(parsed_result)
                     return True, "", parsed_results
                 else:
                     if attempt == 0:
@@ -286,8 +286,8 @@ class SimpleClaudeRunner:
         except Exception as e:
             return False, f"Claude Code execution error: {str(e)}", {}
     
-    def _extract_security_findings(self, claude_output: Any) -> Dict[str, Any]:
-        """Extract security findings from Claude's JSON response."""
+    def _extract_review_findings(self, claude_output: Any) -> Dict[str, Any]:
+        """Extract review findings from Claude's JSON response."""
         if isinstance(claude_output, dict):
             # Only accept Claude Code wrapper with result field
             # Direct format without wrapper is not supported
@@ -310,6 +310,14 @@ class SimpleClaudeRunner:
                 'review_completed': False,
             }
         }
+
+    # Backward-compatible alias
+    def run_security_audit(self, repo_dir: Path, prompt: str) -> Tuple[bool, str, Dict[str, Any]]:
+        return self.run_code_review(repo_dir, prompt)
+
+    # Backward-compatible alias
+    def _extract_security_findings(self, claude_output: Any) -> Dict[str, Any]:
+        return self._extract_review_findings(claude_output)
     
     
     def validate_claude_available(self) -> Tuple[bool, str]:
@@ -430,28 +438,33 @@ def initialize_findings_filter(custom_filtering_instructions: Optional[str] = No
 
 
 
-def run_security_audit(claude_runner: SimpleClaudeRunner, prompt: str) -> Dict[str, Any]:
-    """Run the security audit with Claude Code.
+def run_code_review(claude_runner: SimpleClaudeRunner, prompt: str) -> Dict[str, Any]:
+    """Run the code review with Claude Code.
     
     Args:
         claude_runner: Claude runner instance
-        prompt: The security audit prompt
+        prompt: The review prompt
         
     Returns:
-        Audit results dictionary
+        Review results dictionary
         
     Raises:
-        AuditError: If the audit fails
+        AuditError: If the review fails
     """
     # Get repo directory from environment or use current directory
     repo_path = os.environ.get('REPO_PATH')
     repo_dir = Path(repo_path) if repo_path else Path.cwd()
-    success, error_msg, results = claude_runner.run_security_audit(repo_dir, prompt)
+    success, error_msg, results = claude_runner.run_code_review(repo_dir, prompt)
     
     if not success:
-        raise AuditError(f'Security audit failed: {error_msg}')
+        raise AuditError(f'Code review failed: {error_msg}')
         
     return results
+
+
+def run_security_audit(claude_runner: SimpleClaudeRunner, prompt: str) -> Dict[str, Any]:
+    """Backward-compatible wrapper for previous security audit runner."""
+    return run_code_review(claude_runner, prompt)
 
 
 def apply_findings_filter(findings_filter, original_findings: List[Dict[str, Any]], 
@@ -505,7 +518,7 @@ def _is_finding_in_excluded_directory(finding: Dict[str, Any], github_client: Gi
     """Check if a finding references a file in an excluded directory.
     
     Args:
-        finding: Security finding dictionary
+        finding: Review finding dictionary
         github_client: GitHub client with exclusion logic
         
     Returns:
@@ -539,16 +552,27 @@ def main():
             except Exception as e:
                 logger.warning(f"Failed to read filtering instructions file {filtering_file}: {e}")
         
-        # Load custom security scan instructions if provided
-        custom_scan_instructions = None
-        scan_file = os.environ.get('CUSTOM_SECURITY_SCAN_INSTRUCTIONS', '')
-        if scan_file and Path(scan_file).exists():
+        # Load custom review instructions if provided
+        custom_review_instructions = None
+        review_file = os.environ.get('CUSTOM_REVIEW_INSTRUCTIONS', '')
+        if review_file and Path(review_file).exists():
             try:
-                with open(scan_file, 'r', encoding='utf-8') as f:
-                    custom_scan_instructions = f.read()
-                    logger.info(f"Loaded custom security scan instructions from {scan_file}")
+                with open(review_file, 'r', encoding='utf-8') as f:
+                    custom_review_instructions = f.read()
+                    logger.info(f"Loaded custom review instructions from {review_file}")
             except Exception as e:
-                logger.warning(f"Failed to read security scan instructions file {scan_file}: {e}")
+                logger.warning(f"Failed to read review instructions file {review_file}: {e}")
+
+        # Load custom security scan instructions if provided (appended to security section)
+        custom_security_instructions = None
+        security_scan_file = os.environ.get('CUSTOM_SECURITY_SCAN_INSTRUCTIONS', '')
+        if security_scan_file and Path(security_scan_file).exists():
+            try:
+                with open(security_scan_file, 'r', encoding='utf-8') as f:
+                    custom_security_instructions = f.read()
+                    logger.info(f"Loaded custom security scan instructions from {security_scan_file}")
+            except Exception as e:
+                logger.warning(f"Failed to read security scan instructions file {security_scan_file}: {e}")
         
         # Initialize components
         try:
@@ -578,28 +602,75 @@ def main():
             print(json.dumps({'error': f'Failed to fetch PR data: {str(e)}'}))
             sys.exit(EXIT_GENERAL_ERROR)
                 
-        # Generate security audit prompt
-        prompt = get_security_audit_prompt(pr_data, pr_diff, custom_scan_instructions=custom_scan_instructions)
-        
-        # Run Claude Code security audit
+        # Determine which review passes to run
+        run_general_review = os.environ.get('RUN_GENERAL_REVIEW', 'true').lower() == 'true'
+        run_security_review = os.environ.get('RUN_SECURITY_REVIEW', 'true').lower() == 'true'
+
+        if not run_general_review and not run_security_review:
+            print(json.dumps({'error': 'Both RUN_GENERAL_REVIEW and RUN_SECURITY_REVIEW are disabled'}))
+            sys.exit(EXIT_CONFIGURATION_ERROR)
+
         # Get repo directory from environment or use current directory
         repo_path = os.environ.get('REPO_PATH')
         repo_dir = Path(repo_path) if repo_path else Path.cwd()
-        success, error_msg, results = claude_runner.run_security_audit(repo_dir, prompt)
-        
-        # If prompt is too long, retry without diff
-        if not success and error_msg == "PROMPT_TOO_LONG":
-            print(f"[Info] Prompt too long, retrying without diff. Original prompt length: {len(prompt)} characters", file=sys.stderr)
-            prompt_without_diff = get_security_audit_prompt(pr_data, pr_diff, include_diff=False, custom_scan_instructions=custom_scan_instructions)
-            print(f"[Info] New prompt length: {len(prompt_without_diff)} characters", file=sys.stderr)
-            success, error_msg, results = claude_runner.run_security_audit(repo_dir, prompt_without_diff)
-        
-        if not success:
-            print(json.dumps({'error': f'Security audit failed: {error_msg}'}))
+
+        def run_review_pass(label: str, prompt_builder):
+            prompt_text = prompt_builder(include_diff=True)
+            success, error_msg, pass_results = claude_runner.run_code_review(repo_dir, prompt_text)
+
+            if not success and error_msg == "PROMPT_TOO_LONG":
+                print(f"[Info] {label} prompt too long, retrying without diff. Original prompt length: {len(prompt_text)} characters", file=sys.stderr)
+                prompt_without_diff = prompt_builder(include_diff=False)
+                print(f"[Info] {label} prompt length without diff: {len(prompt_without_diff)} characters", file=sys.stderr)
+                success, error_msg, pass_results = claude_runner.run_code_review(repo_dir, prompt_without_diff)
+
+            if not success:
+                raise AuditError(f'{label} failed: {error_msg}')
+
+            return pass_results
+
+        all_findings = []
+        pass_summaries = {}
+
+        try:
+            if run_general_review:
+                general_results = run_review_pass(
+                    "Code review",
+                    lambda include_diff: get_code_review_prompt(
+                        pr_data,
+                        pr_diff,
+                        include_diff=include_diff,
+                        custom_review_instructions=custom_review_instructions,
+                    ),
+                )
+                pass_summaries['general'] = general_results.get('analysis_summary', {})
+                for finding in general_results.get('findings', []):
+                    if isinstance(finding, dict):
+                        finding.setdefault('review_type', 'general')
+                    all_findings.append(finding)
+
+            if run_security_review:
+                security_results = run_review_pass(
+                    "Security review",
+                    lambda include_diff: get_security_review_prompt(
+                        pr_data,
+                        pr_diff,
+                        include_diff=include_diff,
+                        custom_security_instructions=custom_security_instructions,
+                    ),
+                )
+                pass_summaries['security'] = security_results.get('analysis_summary', {})
+                for finding in security_results.get('findings', []):
+                    if isinstance(finding, dict):
+                        finding.setdefault('review_type', 'security')
+                    all_findings.append(finding)
+
+        except AuditError as e:
+            print(json.dumps({'error': f'Code review failed: {str(e)}'}))
             sys.exit(EXIT_GENERAL_ERROR)
-        
+
         # Filter findings to reduce false positives
-        original_findings = results.get('findings', [])
+        original_findings = all_findings
         
         # Prepare PR context for better filtering
         pr_context = {
@@ -614,12 +685,32 @@ def main():
             findings_filter, original_findings, pr_context, github_client
         )
         
+        # Prepare output summary
+        def severity_counts(findings_list):
+            high = len([f for f in findings_list if isinstance(f, dict) and f.get('severity', '').upper() == 'HIGH'])
+            medium = len([f for f in findings_list if isinstance(f, dict) and f.get('severity', '').upper() == 'MEDIUM'])
+            low = len([f for f in findings_list if isinstance(f, dict) and f.get('severity', '').upper() == 'LOW'])
+            return high, medium, low
+
+        high_count, medium_count, low_count = severity_counts(kept_findings)
+        files_reviewed = 0
+        for summary in pass_summaries.values():
+            if isinstance(summary, dict) and isinstance(summary.get('files_reviewed'), int):
+                files_reviewed = max(files_reviewed, summary['files_reviewed'])
+
         # Prepare output
         output = {
             'pr_number': pr_number,
             'repo': repo_name,
             'findings': kept_findings,
-            'analysis_summary': results.get('analysis_summary', {}),
+            'analysis_summary': {
+                'files_reviewed': files_reviewed,
+                'high_severity': high_count,
+                'medium_severity': medium_count,
+                'low_severity': low_count,
+                'review_completed': True,
+                'passes': pass_summaries
+            },
             'filtering_summary': {
                 'total_original_findings': len(original_findings),
                 'excluded_findings': len(excluded_findings),

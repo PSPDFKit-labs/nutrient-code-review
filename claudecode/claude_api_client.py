@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 
 
 class ClaudeAPIClient:
-    """Client for calling Claude API directly for security analysis tasks."""
+    """Client for calling Claude API directly for review analysis tasks."""
     
     def __init__(self, 
                  model: Optional[str] = None,
@@ -146,10 +146,10 @@ class ClaudeAPIClient:
                               finding: Dict[str, Any], 
                               pr_context: Optional[Dict[str, Any]] = None,
                               custom_filtering_instructions: Optional[str] = None) -> Tuple[bool, Dict[str, Any], str]:
-        """Analyze a single security finding to filter false positives using Claude API.
+        """Analyze a single review finding to filter false positives using Claude API.
         
         Args:
-            finding: Single security finding to analyze
+            finding: Single review finding to analyze
             pr_context: Optional PR context for better analysis
             
         Returns:
@@ -180,15 +180,15 @@ class ClaudeAPIClient:
                 return False, {}, "Failed to parse JSON response"
                 
         except Exception as e:
-            logger.exception(f"Error during single finding security analysis: {str(e)}")
-            return False, {}, f"Single finding security analysis failed: {str(e)}"
+            logger.exception(f"Error during single finding review analysis: {str(e)}")
+            return False, {}, f"Single finding review analysis failed: {str(e)}"
 
     
     def _generate_system_prompt(self) -> str:
-        """Generate system prompt for security analysis."""
-        return """You are a security expert reviewing findings from an automated code audit tool.
-Your task is to filter out false positives and low-signal findings to reduce alert fatigue.
-You must maintain high recall (don't miss real vulnerabilities) while improving precision.
+        """Generate system prompt for review analysis."""
+        return """You are a senior code reviewer evaluating findings from an automated review tool.
+Your task is to filter out false positives and low-signal findings to reduce noise.
+You must maintain high recall (don't miss real issues) while improving precision.
 
 Respond ONLY with valid JSON in the exact format specified in the user prompt.
 Do not include explanatory text, markdown formatting, or code blocks."""
@@ -197,10 +197,10 @@ Do not include explanatory text, markdown formatting, or code blocks."""
                                        finding: Dict[str, Any], 
                                        pr_context: Optional[Dict[str, Any]] = None,
                                        custom_filtering_instructions: Optional[str] = None) -> str:
-        """Generate prompt for analyzing a single security finding.
+        """Generate prompt for analyzing a single review finding.
         
         Args:
-            finding: Single security finding
+            finding: Single review finding
             pr_context: Optional PR context
             
         Returns:
@@ -241,49 +241,28 @@ File Content ({file_path}): Error reading file - {error}
             filtering_section = custom_filtering_instructions
         else:
             filtering_section = """HARD EXCLUSIONS - Automatically exclude findings matching these patterns:
-1. Denial of Service (DOS) vulnerabilities or resource exhaustion attacks
-2. Secrets/credentials stored on disk (these are managed separately) 
-3. Rate limiting concerns or service overload scenarios (services don't need to implement rate limiting)
-4. Memory consumption or CPU exhaustion issues
-5. Lack of input validation on non-security-critical fields without proven security impact
-6. Input sanitization concerns for github action workflows
-7. A lack of hardening measures. Code is not expected to implement all security best practices, just avoid obvious vulnerabilities.
-8. Race conditions or timing attacks that are theoretical rather than practical issues. Only report a race condition if it is extremely problematic.
-9. Vulnerabilities related to outdated third-party libraries. These are managed separately and should not be reported here.
-10. Memory safety issues such as buffer overflows or use-after-free-vulnerabilities are impossible in rust. Do not report memory safety issues in rust code.
-11. Files that are only unit tests or only used as part of running tests.
-12. Log spoofing concerns. Outputing un-sanitized user input to logs is not a vulnerability.
-13. SSRF vulnerabilities that only control the path. SSRF is only a concern if it can control the host or protocol.
-14. Including user-controlled content in AI system prompts is not a vulnerability. In general, the inclusion of user input in an AI prompt is not a vulnerability.
-15. Do not report issues related to adding a dependency to a project that is not available from the relevant package repository. Depending on internal libraries that are not publicly available is not a vulnerability.
-16. Do not report issues that cause the code to crash, but are not actually a vulnerability. E.g. a variable that is undefined or null is not a vulnerability.
+1. Purely stylistic or formatting preferences (naming, spacing, comment wording) with no functional impact.
+2. Documentation-only issues or typos that do not affect behavior or safety.
+3. Refactor suggestions without a concrete bug, regression, or risk reduction.
+4. Hypothetical issues without a clear failure mode or reproducible impact.
+
+SECURITY-SPECIFIC EXCLUSIONS (apply ONLY if the category indicates security):
+1. Denial of Service (DOS) or resource exhaustion concerns without concrete exploitability.
+2. Rate limiting recommendations without a specific abuse path.
+3. Memory safety issues in memory-safe languages (e.g., Rust).
 
 SIGNAL QUALITY CRITERIA - For remaining findings, assess:
-1. Is there a concrete, exploitable vulnerability with a clear attack path?
-2. Does this represent a real security risk vs theoretical best practice?
+1. Is there a concrete failure mode or exploit path?
+2. Is the impact meaningful (bug, regression, security risk, data loss)?
 3. Are there specific code locations and reproduction steps?
-4. Would this finding be actionable for a security team?
+4. Would this be actionable for the team?
 
-PRECEDENTS - 
-1. Logging high value secrets in plaintext is a vulnerability. Otherwise, do not report issues around theoretical exposures of secrets. Logging URLs is assumed to be safe. Logging request headers is assumed to be dangerous since they likely contain credentials.
-2. UUIDs can be assumed to be unguessable and do not need to be validated. If a vulnerabilities requires guessing a UUID, it is not a valid vulnerability.
-3. Audit logs are not a critical security feature and should not be reported as a vulnerability if they are missing or modified.
-4. Environment variables and CLI flags are trusted values. Attackers are not able to modify them in a secure environment. Any attack that relies on controlling an environment variable is invalid.
-5. Resource management issues such as memory or file descriptor leaks are not valid.
-6. Subtle or low impact web vulnerabilities such as tabnabbing, XS-Leaks, prototype pollution, and open redirects are not valid.
-7. Vulnerabilities related to outdated third-party libraries. These are managed separately and should not be reported here.
-8. React is generally secure against XSS. React does not need to sanitize or escape user input unless it is using dangerouslySetInnerHTML or similar methods. Do not report XSS vulnerabilities in React components or tsx files unless they are using unsafe methods.
-9. Most vulnerabilities in github action workflows are not exploitable in practice. Before validating a github action workflow vulnerability ensure it is concrete and has a very specific attack path.
-10. A lack of permission checking or authentication in client-side TS code is not a vulnerability. Client-side code is not trusted and does not need to implement these checks, they are handled on the server-side. The same applies to all flows that send untrusted data to the backend, the backend is responsible for validating and sanitizing all inputs.
-11. Only include MEDIUM findings if they are obvious and concrete issues.
-12. Most vulnerabilities in ipython notebooks (*.ipynb files) are not exploitable in practice. Before validating a notebook vulnerability ensure it is concrete and has a very specific attack path.
-13. Logging non-PII data is not a vulnerability even if the data may be sensitive. Only report logging vulnerabilities if they expose sensitive information such as secrets, passwords, or personally identifiable information (PII).
-14. Command injection vulnerabilities in shell scripts are generally not exploitable in practice since shell scripts generally do not run with untrusted user input. Only report command injection vulnerabilities in shell scripts if they are concrete and have a very specific attack path for untrusted input.
-15. SSRF (Server-Side Request Forgery) vulnerabilities in client-side JavaScript/TypeScript files (.js, .ts, .tsx, .jsx) are not valid since client-side code cannot make server-side requests that would bypass firewalls or access internal resources. Only report SSRF in server-side code (e.g. Python or JS that is known to run on the server-side). The same logic applies to path-traversal attacks, they are not a problem in client-side JS.
-16. Path traversal attacks using ../ are generally not a problem when triggering HTTP requests. These are generally only relevant when reading files where the ../ may allow accessing unintended files.
-17. Injecting into log queries is generally not an issue. Only report this if the injection will definitely lead to exposing sensitive data to external users."""
+PRECEDENTS -
+1. Keep findings that indicate a likely production issue, security vulnerability, or significant regression.
+2. Only include MEDIUM findings if they are obvious and concrete issues.
+3. For security findings, prefer concrete exploitability and avoid theoretical best-practice gaps."""
         
-        return f"""I need you to analyze a security finding from an automated code audit and determine if it's a false positive.
+        return f"""I need you to analyze a code review finding from an automated audit and determine if it's a false positive.
 
 {pr_info}
 
@@ -292,7 +271,7 @@ PRECEDENTS -
 Assign a confidence score from 1-10:
 - 1-3: Low confidence, likely false positive or noise
 - 4-6: Medium confidence, needs investigation  
-- 7-10: High confidence, likely true vulnerability
+- 7-10: High confidence, likely true issue
 
 Finding to analyze:
 ```json
@@ -306,7 +285,7 @@ Respond with EXACTLY this JSON structure (no markdown, no code blocks):
   "confidence_score": 8,
   "keep_finding": true,
   "exclusion_reason": null,
-  "justification": "Clear SQL injection vulnerability with specific exploit path"
+  "justification": "Clear off-by-one error that causes data loss on edge cases"
 }}"""
 
     
@@ -372,5 +351,3 @@ def get_claude_api_client(model: str = DEFAULT_CLAUDE_MODEL,
         api_key=api_key,
         timeout_seconds=timeout_seconds
     )
-
-

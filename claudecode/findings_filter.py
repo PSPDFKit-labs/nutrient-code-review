@@ -1,4 +1,4 @@
-"""Findings filter for reducing false positives in security audit results."""
+"""Findings filter for reducing false positives in code review results."""
 
 import re
 from typing import Dict, Any, List, Tuple, Optional, Pattern
@@ -26,6 +26,29 @@ class FilterStats:
 
 class HardExclusionRules:
     """Hard exclusion rules for common false positives."""
+
+    _SECURITY_HINT_PATTERNS: List[Pattern] = [
+        re.compile(r'\bsecurity\b', re.IGNORECASE),
+        re.compile(r'\bvulnerabilit(?:y|ies)\b', re.IGNORECASE),
+        re.compile(r'\bvuln\b', re.IGNORECASE),
+        re.compile(r'\bsql(i)?\b', re.IGNORECASE),
+        re.compile(r'\bxss\b', re.IGNORECASE),
+        re.compile(r'\bcsrf\b', re.IGNORECASE),
+        re.compile(r'\bssrf\b', re.IGNORECASE),
+        re.compile(r'\binjection\b', re.IGNORECASE),
+        re.compile(r'\brce\b', re.IGNORECASE),
+        re.compile(r'\bremote code execution\b', re.IGNORECASE),
+        re.compile(r'\bdeseriali[sz]ation\b', re.IGNORECASE),
+        re.compile(r'\bauth\b', re.IGNORECASE),
+        re.compile(r'\bauthorization\b', re.IGNORECASE),
+        re.compile(r'\bcrypt(o|ography)?\b', re.IGNORECASE),
+        re.compile(r'\bsecret(s)?\b', re.IGNORECASE),
+        re.compile(r'\bcredential(s)?\b', re.IGNORECASE),
+        re.compile(r'\bjwt\b', re.IGNORECASE),
+        re.compile(r'\bcors\b', re.IGNORECASE),
+        re.compile(r'\bxxe\b', re.IGNORECASE),
+        re.compile(r'\bpath traversal\b', re.IGNORECASE),
+    ]
     
     # Pre-compiled regex patterns for better performance
     _DOS_PATTERNS: List[Pattern] = [
@@ -79,6 +102,16 @@ class HardExclusionRules:
     ]
     
     @classmethod
+    def _has_security_hint(cls, text: str) -> bool:
+        """Determine if text contains security-related hints."""
+        if not text:
+            return False
+        for pattern in cls._SECURITY_HINT_PATTERNS:
+            if pattern.search(text):
+                return True
+        return False
+
+    @classmethod
     def get_exclusion_reason(cls, finding: Dict[str, Any]) -> Optional[str]:
         """Check if a finding should be excluded based on hard rules.
         
@@ -88,47 +121,52 @@ class HardExclusionRules:
         Returns:
             Exclusion reason if finding should be excluded, None otherwise
         """
+        category = (finding.get('category') or '').lower()
+        title = finding.get('title', '') or ''
+        description = finding.get('description', '') or ''
+
+        is_security = cls._has_security_hint(category)
+        if not is_security:
+            combined_text = f"{title} {description}"
+            is_security = cls._has_security_hint(combined_text)
+
         # Check if finding is in a Markdown file
         file_path = finding.get('file', '')
         if file_path.lower().endswith('.md'):
             return "Finding in Markdown documentation file"
-        
-        description = finding.get('description', '')
-        title = finding.get('title', '')
-        
-        # Handle None values
-        if description is None:
-            description = ''
-        if title is None:
-            title = ''
-            
+
         combined_text = f"{title} {description}".lower()
         
-        # Check DOS patterns
-        for pattern in cls._DOS_PATTERNS:
-            if pattern.search(combined_text):
-                return "Generic DOS/resource exhaustion finding (low signal)"
+        if is_security:
+            # Check DOS patterns
+            for pattern in cls._DOS_PATTERNS:
+                if pattern.search(combined_text):
+                    return "Generic DOS/resource exhaustion finding (low signal)"
         
         
-        # Check rate limiting patterns  
-        for pattern in cls._RATE_LIMITING_PATTERNS:
-            if pattern.search(combined_text):
-                return "Generic rate limiting recommendation"
+        if is_security:
+            # Check rate limiting patterns
+            for pattern in cls._RATE_LIMITING_PATTERNS:
+                if pattern.search(combined_text):
+                    return "Generic rate limiting recommendation"
         
-        # Check resource patterns - always exclude
-        for pattern in cls._RESOURCE_PATTERNS:
-            if pattern.search(combined_text):
-                return "Resource management finding (not a security vulnerability)"
+        if is_security:
+            # Check resource patterns - exclude for security-only findings
+            for pattern in cls._RESOURCE_PATTERNS:
+                if pattern.search(combined_text):
+                    return "Resource management finding (not a security vulnerability)"
         
-        # Check open redirect patterns
-        for pattern in cls._OPEN_REDIRECT_PATTERNS:
-            if pattern.search(combined_text):
-                return "Open redirect vulnerability (not high impact)"
+        if is_security:
+            # Check open redirect patterns
+            for pattern in cls._OPEN_REDIRECT_PATTERNS:
+                if pattern.search(combined_text):
+                    return "Open redirect vulnerability (not high impact)"
             
-        # Check regex injection patterns
-        for pattern in cls._REGEX_INJECTION:
-            if pattern.search(combined_text):
-                return "Regex injection finding (not applicable)"
+        if is_security:
+            # Check regex injection patterns
+            for pattern in cls._REGEX_INJECTION:
+                if pattern.search(combined_text):
+                    return "Regex injection finding (not applicable)"
         
         # Check memory safety patterns - exclude if NOT in C/C++ files
         c_cpp_extensions = {'.c', '.cc', '.cpp', '.h'}
@@ -137,7 +175,7 @@ class HardExclusionRules:
             file_ext = f".{file_path.lower().split('.')[-1]}"
         
         # If file doesn't have a C/C++ extension (including no extension), exclude memory safety findings
-        if file_ext not in c_cpp_extensions:
+        if is_security and file_ext not in c_cpp_extensions:
             for pattern in cls._MEMORY_SAFETY_PATTERNS:
                 if pattern.search(combined_text):
                     return "Memory safety finding in non-C/C++ code (not applicable)"
@@ -146,7 +184,7 @@ class HardExclusionRules:
         html_extensions = {'.html'}
         
         # If file has HTML extension, exclude SSRF findings
-        if file_ext in html_extensions:
+        if is_security and file_ext in html_extensions:
             for pattern in cls._SSRF_PATTERNS:
                 if pattern.search(combined_text):
                     return "SSRF finding in HTML file (not applicable to client-side code)"
@@ -155,7 +193,7 @@ class HardExclusionRules:
 
 
 class FindingsFilter:
-    """Main filter class for security findings."""
+    """Main filter class for review findings."""
     
     def __init__(self, 
                  use_hard_exclusions: bool = True,
@@ -197,10 +235,10 @@ class FindingsFilter:
     def filter_findings(self, 
                        findings: List[Dict[str, Any]],
                        pr_context: Optional[Dict[str, Any]] = None) -> Tuple[bool, Dict[str, Any], FilterStats]:
-        """Filter security findings to remove false positives.
+        """Filter review findings to remove false positives.
         
         Args:
-            findings: List of security findings from Claude Code audit
+            findings: List of review findings from Claude Code audit
             pr_context: Optional PR context for better analysis
             
         Returns:
@@ -221,7 +259,7 @@ class FindingsFilter:
                 }
             }, stats
         
-        logger.info(f"Filtering {len(findings)} security findings")
+        logger.info(f"Filtering {len(findings)} review findings")
         
         # Initialize statistics
         stats = FilterStats(total_findings=len(findings))

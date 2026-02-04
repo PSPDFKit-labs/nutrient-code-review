@@ -1,0 +1,11 @@
+**Architecture Invariants:**
+- All write APIs must be idempotent (safe to retry)
+- Requests must carry a correlation ID through logs
+
+**Performance Constraints:**
+- Avoid O(n^2) operations in request handlers
+- Avoid synchronous network calls on the main request thread
+
+**Testing Expectations:**
+- Add unit tests for new validation branches
+- Add integration tests for payment flows and refunds

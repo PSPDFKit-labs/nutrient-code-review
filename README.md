@@ -1,22 +1,25 @@
-# Claude Code Security Reviewer
+# Claude Code Reviewer
 
-An AI-powered security review GitHub Action using Claude to analyze code changes for security vulnerabilities. This action provides intelligent, context-aware security analysis for pull requests using Anthropic's Claude Code tool for deep semantic security analysis. See our blog post [here](https://www.anthropic.com/news/automate-security-reviews-with-claude-code) for more details.
+An AI-powered code review GitHub Action using Claude to analyze code changes. Runs two focused passes: a code quality review (correctness, reliability, performance, maintainability, testing) and a dedicated security review. This action provides intelligent, context-aware review for pull requests using Anthropic's Claude Code tool for deep semantic analysis.
+
+Based on the original work from [anthropics/claude-code-security-review](https://github.com/anthropics/claude-code-security-review).
 
 ## Features
 
-- **AI-Powered Analysis**: Uses Claude's advanced reasoning to detect security vulnerabilities with deep semantic understanding
+- **AI-Powered Analysis**: Uses Claude's advanced reasoning to detect issues with deep semantic understanding
 - **Diff-Aware Scanning**: For PRs, only analyzes changed files
-- **PR Comments**: Automatically comments on PRs with security findings
-- **Contextual Understanding**: Goes beyond pattern matching to understand code semantics
+- **PR Comments**: Automatically comments on PRs with findings
+- **Contextual Understanding**: Goes beyond pattern matching to understand code semantics and intent
 - **Language Agnostic**: Works with any programming language
-- **False Positive Filtering**: Advanced filtering to reduce noise and focus on real vulnerabilities
+- **False Positive Filtering**: Advanced filtering to reduce noise and focus on real issues
+- **Dual-Pass Review**: Runs focused code quality and security passes separately for better signal
 
 ## Quick Start
 
-Add this to your repository's `.github/workflows/security.yml`:
+Add this to your repository's `.github/workflows/code-review.yml`:
 
 ```yaml
-name: Security Review
+name: Code Review
 
 permissions:
   pull-requests: write  # Needed for leaving PR comments
@@ -26,7 +29,7 @@ on:
   pull_request:
 
 jobs:
-  security:
+  review:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +37,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
       
-      - uses: anthropics/claude-code-security-review@main
+      - uses: PSPDFKit-labs/claude-code-review@main
         with:
           comment-pr: true
           claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
@@ -50,21 +53,24 @@ This action is not hardened against prompt injection attacks and should only be 
 
 | Input | Description | Default | Required |
 |-------|-------------|---------|----------|
-| `claude-api-key` | Anthropic Claude API key for security analysis. <br>*Note*: This API key needs to be enabled for both the Claude API and Claude Code usage. | None | Yes |
+| `claude-api-key` | Anthropic Claude API key for code review analysis. <br>*Note*: This API key needs to be enabled for both the Claude API and Claude Code usage. | None | Yes |
 | `comment-pr` | Whether to comment on PRs with findings | `true` | No |
 | `upload-results` | Whether to upload results as artifacts | `true` | No |
 | `exclude-directories` | Comma-separated list of directories to exclude from scanning | None | No |
-| `claude-model` | Claude [model name](https://docs.anthropic.com/en/docs/about-claude/models/overview#model-names) to use. Defaults to Opus 4.1. | `claude-opus-4-1-20250805` | No |
+| `claude-model` | Claude [model name](https://docs.anthropic.com/en/docs/about-claude/models/overview#model-names) to use. Defaults to Opus 4.5. | `claude-opus-4-5-20251101` | No |
 | `claudecode-timeout` | Timeout for ClaudeCode analysis in minutes | `20` | No |
 | `run-every-commit` | Run ClaudeCode on every commit (skips cache check). Warning: May increase false positives on PRs with many commits. | `false` | No |
 | `false-positive-filtering-instructions` | Path to custom false positive filtering instructions text file | None | No |
-| `custom-security-scan-instructions` | Path to custom security scan instructions text file to append to audit prompt | None | No |
+| `custom-review-instructions` | Path to custom code review instructions text file to append to the audit prompt | None | No |
+| `custom-security-scan-instructions` | Path to custom security scan instructions text file to append to the security section | None | No |
+| `run-general-review` | Whether to run the code quality review pass (correctness, reliability, performance, maintainability, testing) | `true` | No |
+| `run-security-review` | Whether to run the dedicated security review pass | `true` | No |
 
 ### Action Outputs
 
 | Output | Description |
 |--------|-------------|
-| `findings-count` | Total number of security findings |
+| `findings-count` | Total number of code review findings |
 | `results-file` | Path to the results JSON file |
 
 ## How It Works
@@ -74,7 +80,7 @@ This action is not hardened against prompt injection attacks and should only be 
 ```
 claudecode/
 ├── github_action_audit.py  # Main audit script for GitHub Actions
-├── prompts.py              # Security audit prompt templates
+├── prompts.py              # Code review prompt templates
 ├── findings_filter.py      # False positive filtering logic
 ├── claude_api_client.py    # Claude API client for false positive filtering
 ├── json_parser.py          # Robust JSON parsing utilities
@@ -86,43 +92,38 @@ claudecode/
 ### Workflow
 
 1. **PR Analysis**: When a pull request is opened, Claude analyzes the diff to understand what changed
-2. **Contextual Review**: Claude examines the code changes in context, understanding the purpose and potential security implications
-3. **Finding Generation**: Security issues are identified with detailed explanations, severity ratings, and remediation guidance
+2. **Contextual Review**: Claude examines the code changes in context, understanding the purpose and potential impacts
+3. **Finding Generation**: Issues are identified with detailed explanations, severity ratings, and remediation guidance
 4. **False Positive Filtering**: Advanced filtering removes low-impact or false positive prone findings to reduce noise
 5. **PR Comments**: Findings are posted as review comments on the specific lines of code
 
-## Security Analysis Capabilities
+## Review Capabilities
 
-### Types of Vulnerabilities Detected
+### Types of Issues Detected
 
-- **Injection Attacks**: SQL injection, command injection, LDAP injection, XPath injection, NoSQL injection, XXE
-- **Authentication & Authorization**: Broken authentication, privilege escalation, insecure direct object references, bypass logic, session flaws
-- **Data Exposure**: Hardcoded secrets, sensitive data logging, information disclosure, PII handling violations
-- **Cryptographic Issues**: Weak algorithms, improper key management, insecure random number generation
-- **Input Validation**: Missing validation, improper sanitization, buffer overflows
-- **Business Logic Flaws**: Race conditions, time-of-check-time-of-use (TOCTOU) issues
-- **Configuration Security**: Insecure defaults, missing security headers, permissive CORS
-- **Supply Chain**: Vulnerable dependencies, typosquatting risks
-- **Code Execution**: RCE via deserialization, pickle injection, eval injection
-- **Cross-Site Scripting (XSS)**: Reflected, stored, and DOM-based XSS
+- **Correctness & Logic**: Wrong results, edge cases, invariant breaks
+- **Reliability & Resilience**: Concurrency issues, partial failure handling, idempotency risks
+- **Performance & Scalability**: Algorithmic regressions, N+1 queries, hot-path slowdowns
+- **Maintainability & Design**: Risky complexity increases, brittle contracts
+- **Testing & Observability**: Missing tests for high-risk changes, missing diagnostics
+- **Security**: Injection, auth bypass, unsafe deserialization, sensitive data exposure
 
 ### False Positive Filtering
 
-The tool automatically excludes a variety of low-impact and false positive prone findings to focus on high-impact vulnerabilities:
-- Denial of Service vulnerabilities
-- Rate limiting concerns
-- Memory/CPU exhaustion issues
-- Generic input validation without proven impact
-- Open redirect vulnerabilities
+The tool automatically excludes a variety of low-signal findings to focus on high-impact issues:
+- Purely stylistic or formatting concerns
+- Documentation-only changes without behavioral impact
+- Hypothetical issues without a clear failure mode
+- Security-only exclusions for low-signal categories (e.g., generic DOS/rate limit comments)
 
-The false positive filtering can also be tuned as needed for a given project's security goals.
+The false positive filtering can also be tuned as needed for a given project's goals.
 
 ### Benefits Over Traditional SAST
 
 - **Contextual Understanding**: Understands code semantics and intent, not just patterns
-- **Lower False Positives**: AI-powered analysis reduces noise by understanding when code is actually vulnerable
-- **Detailed Explanations**: Provides clear explanations of why something is a vulnerability and how to fix it
-- **Adaptive Learning**: Can be customized with organization-specific security requirements
+- **Lower False Positives**: AI-powered analysis reduces noise by understanding when code is actually risky
+- **Detailed Explanations**: Provides clear explanations of why something is an issue and how to fix it
+- **Adaptive Learning**: Can be customized with organization-specific requirements
 
 ## Installation & Setup
 
@@ -132,31 +133,31 @@ Follow the Quick Start guide above. The action handles all dependencies automati
 
 ### Local Development
 
-To run the security scanner locally against a specific PR, see the [evaluation framework documentation](claudecode/evals/README.md).
+To run the reviewer locally against a specific PR, see the [evaluation framework documentation](claudecode/evals/README.md).
 
 <a id="security-review-slash-command"></a>
 
-## Claude Code Integration: /security-review Command 
+## Claude Code Integration: /code-review Command
 
-By default, Claude Code ships a `/security-review` [slash command](https://docs.anthropic.com/en/docs/claude-code/slash-commands) that provides the same security analysis capabilities as the GitHub Action workflow, but integrated directly into your Claude Code development environment. To use this, simply run `/security-review` to perform a comprehensive security review of all pending changes.
+This repository includes `/code-review` and `/security-review` [slash commands](https://docs.anthropic.com/en/docs/claude-code/slash-commands) that provide the same review capabilities as the GitHub Action workflow. Use `/code-review` for a broad review (correctness, reliability, performance, maintainability, testing, and security), and `/security-review` for a security-focused review.
 
 ### Customizing the Command
 
-The default `/security-review` command is designed to work well in most cases, but it can also be customized based on your specific security needs. To do so: 
+The default commands are designed to work well in most cases, but they can also be customized based on your specific requirements. To do so:
 
-1. Copy the [`security-review.md`](https://github.com/anthropics/claude-code-security-review/blob/main/.claude/commands/security-review.md?plain=1) file from this repository to your project's `.claude/commands/` folder. 
-2. Edit `security-review.md` to customize the security analysis. For example, you could add additional organization-specific directions to the false positive filtering instructions. 
+1. Copy the [`code-review.md`](https://github.com/PSPDFKit-labs/claude-code-review/blob/main/.claude/commands/code-review.md?plain=1) or [`security-review.md`](https://github.com/PSPDFKit-labs/claude-code-review/blob/main/.claude/commands/security-review.md?plain=1) file from this repository to your project's `.claude/commands/` folder.
+2. Edit the copied file to customize the review instructions.
 
 ## Custom Scanning Configuration
 
-It is also possible to configure custom scanning and false positive filtering instructions, see the [`docs/`](docs/) folder for more details.  
+It is also possible to configure custom scanning and false positive filtering instructions, see the [`docs/`](docs/) folder for more details.
 
 ## Testing
 
 Run the test suite to validate functionality:
 
 ```bash
-cd claude-code-security-review
+cd claude-code-review
 # Run all tests
 pytest claudecode -v
 ```

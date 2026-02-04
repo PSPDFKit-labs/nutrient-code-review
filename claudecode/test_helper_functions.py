@@ -9,7 +9,7 @@ from claudecode.github_action_audit import (
     get_environment_config,
     initialize_clients,
     initialize_findings_filter,
-    run_security_audit,
+    run_code_review,
     apply_findings_filter,
     ConfigurationError,
     AuditError
@@ -143,33 +143,33 @@ class TestHelperFunctions:
             
             assert result == mock_filter_instance
     
-    def test_run_security_audit_success(self):
-        """Test successful security audit execution."""
+    def test_run_code_review_success(self):
+        """Test successful code review execution."""
         mock_runner = MagicMock()
-        mock_runner.run_security_audit.return_value = (
+        mock_runner.run_code_review.return_value = (
             True,
             "",
             {"findings": [{"id": 1}], "analysis_summary": {}}
         )
         
-        result = run_security_audit(mock_runner, "test prompt")
+        result = run_code_review(mock_runner, "test prompt")
         
         assert result == {"findings": [{"id": 1}], "analysis_summary": {}}
-        mock_runner.run_security_audit.assert_called_once()
+        mock_runner.run_code_review.assert_called_once()
     
-    def test_run_security_audit_failure(self):
-        """Test security audit execution failure."""
+    def test_run_code_review_failure(self):
+        """Test code review execution failure."""
         mock_runner = MagicMock()
-        mock_runner.run_security_audit.return_value = (
+        mock_runner.run_code_review.return_value = (
             False,
             "Audit failed: timeout",
             {}
         )
         
         with pytest.raises(AuditError) as exc_info:
-            run_security_audit(mock_runner, "test prompt")
+            run_code_review(mock_runner, "test prompt")
         
-        assert "Security audit failed: Audit failed: timeout" in str(exc_info.value)
+        assert "Code review failed: Audit failed: timeout" in str(exc_info.value)
     
     def test_apply_findings_filter_with_findings_filter(self):
         """Test applying FindingsFilter to findings."""

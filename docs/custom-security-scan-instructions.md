@@ -1,10 +1,10 @@
 # Custom Security Scan Instructions
 
-The Claude Code Security Reviewer Action supports custom security scan instructions, allowing you to add organization-specific vulnerability categories to the security audit.
+The Claude Code Reviewer Action supports custom security scan instructions, allowing you to add organization-specific vulnerability categories to the security section of the review.
 
 ## Overview
 
-The default security scan covers common vulnerability categories like SQL injection, XSS, authentication issues, etc. However, organizations often have specific security concerns based on their:
+The default reviews cover correctness, reliability, performance, maintainability, testing, and security. The security sections include common vulnerability categories like SQL injection, XSS, and authentication issues. Organizations often have specific security concerns based on their:
 - Technology stack (GraphQL, gRPC, specific cloud providers)
 - Compliance requirements (GDPR, HIPAA, PCI DSS)
 - Industry-specific vulnerabilities (financial services, healthcare)
@@ -18,7 +18,7 @@ The `custom-security-scan-instructions` input allows you to extend the security 
 2. Reference it in your workflow:
 
 ```yaml
-- uses: anthropics/claude-code-security-review@main
+- uses: PSPDFKit-labs/claude-code-review@main
   with:
     custom-security-scan-instructions: .github/custom-security-categories.txt
 ```
@@ -45,16 +45,16 @@ The file should contain additional security categories in the same format as the
 ## Examples
 
 ### Industry-Specific Example
-See [examples/organization-specific-scan-instructions.txt](../examples/custom-security-scan-instructions.txt) for an example set of instructions that customize Claude Code to look for industry-specific security weaknesses including:
+See [examples/custom-security-scan-instructions.txt](../examples/custom-security-scan-instructions.txt) for an example set of instructions that customize Claude Code to look for industry-specific security weaknesses including:
 - Compliance checks (GDPR, HIPAA, PCI DSS)
 - Financial services security
 - E-commerce specific issues
 
 ## How It Works
 
-Your custom instructions are appended to the security audit prompt after the default "Data Exposure" category. This means:
-1. All default categories are still checked
-2. Your custom categories extend (not replace) the default scan
+Your custom instructions are appended to the security sections of both the general review and the dedicated security review prompts. This means:
+1. All default security categories are still checked
+2. Your custom categories extend (not replace) the default security scan
 3. The same HIGH/MEDIUM/LOW severity guidelines apply
 
 ## Best Practices
@@ -67,7 +67,7 @@ Your custom instructions are appended to the security audit prompt after the def
 
 ## Default Categories Reference
 
-The default scan already includes:
+The default security scan already includes:
 - Input Validation (SQL injection, command injection, XXE, etc.)
 - Authentication & Authorization
 - Crypto & Secrets Management

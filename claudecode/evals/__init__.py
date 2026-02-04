@@ -1,4 +1,4 @@
-"""Evaluation tool for SAST."""
+"""Evaluation tool for code review."""
 
 from .eval_engine import EvalCase, EvalResult, EvaluationEngine, run_single_evaluation
 

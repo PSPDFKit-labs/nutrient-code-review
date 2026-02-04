@@ -17,11 +17,12 @@ class TestImports:
     
     def test_component_imports(self):
         """Test that all component modules can be imported."""
-        from claudecode.prompts import get_security_audit_prompt
+        from claudecode.prompts import get_code_review_prompt, get_security_review_prompt
         from claudecode.json_parser import parse_json_with_fallbacks, extract_json_from_text
         
         # Verify they're callable/usable
-        assert callable(get_security_audit_prompt)
+        assert callable(get_code_review_prompt)
+        assert callable(get_security_review_prompt)
         assert callable(parse_json_with_fallbacks)
         assert callable(extract_json_from_text)
 
@@ -34,9 +35,9 @@ class TestHardExclusionRules:
         from claudecode.findings_filter import HardExclusionRules
         
         dos_findings = [
-            {'description': 'Potential denial of service vulnerability'},
-            {'description': 'DOS attack through resource exhaustion'},
-            {'description': 'Infinite loop causing resource exhaustion'},
+            {'description': 'Potential denial of service vulnerability', 'category': 'security'},
+            {'description': 'DOS attack through resource exhaustion', 'category': 'security'},
+            {'description': 'Infinite loop causing resource exhaustion', 'category': 'security'},
         ]
         
         for finding in dos_findings:
@@ -49,9 +50,9 @@ class TestHardExclusionRules:
         from claudecode.findings_filter import HardExclusionRules
         
         rate_limit_findings = [
-            {'description': 'Missing rate limiting on endpoint'},
-            {'description': 'No rate limit implemented for API'},
-            {'description': 'Implement rate limiting for this route'},
+            {'description': 'Missing rate limiting on endpoint', 'category': 'security'},
+            {'description': 'No rate limit implemented for API', 'category': 'security'},
+            {'description': 'Implement rate limiting for this route', 'category': 'security'},
         ]
         
         for finding in rate_limit_findings:
@@ -64,9 +65,9 @@ class TestHardExclusionRules:
         from claudecode.findings_filter import HardExclusionRules
         
         redirect_findings = [
-            {'description': 'Open redirect vulnerability found'},
-            {'description': 'Unvalidated redirect in URL parameter'},
-            {'description': 'Redirect attack possible through user input'},
+            {'description': 'Open redirect vulnerability found', 'category': 'security'},
+            {'description': 'Unvalidated redirect in URL parameter', 'category': 'security'},
+            {'description': 'Redirect attack possible through user input', 'category': 'security'},
         ]
         
         for finding in redirect_findings:
@@ -79,10 +80,10 @@ class TestHardExclusionRules:
         from claudecode.findings_filter import HardExclusionRules
         
         md_findings = [
-            {'file': 'README.md', 'description': 'SQL injection vulnerability'},
-            {'file': 'docs/security.md', 'description': 'Command injection found'},
-            {'file': 'CHANGELOG.MD', 'description': 'XSS vulnerability'},  # Test case insensitive
-            {'file': 'path/to/file.Md', 'description': 'Path traversal'},  # Mixed case
+            {'file': 'README.md', 'description': 'SQL injection vulnerability', 'category': 'security'},
+            {'file': 'docs/security.md', 'description': 'Command injection found', 'category': 'security'},
+            {'file': 'CHANGELOG.MD', 'description': 'XSS vulnerability', 'category': 'security'},  # Test case insensitive
+            {'file': 'path/to/file.Md', 'description': 'Path traversal', 'category': 'security'},  # Mixed case
         ]
         
         for finding in md_findings:
@@ -115,10 +116,10 @@ class TestHardExclusionRules:
         from claudecode.findings_filter import HardExclusionRules
         
         real_vulns = [
-            {'file': 'auth.py', 'description': 'SQL injection in user authentication'},
-            {'file': 'exec.js', 'description': 'Command injection through user input'},
-            {'file': 'comments.php', 'description': 'Cross-site scripting in comment field'},
-            {'file': 'upload.go', 'description': 'Path traversal in file upload'},
+            {'file': 'auth.py', 'description': 'SQL injection in user authentication', 'category': 'security'},
+            {'file': 'exec.js', 'description': 'Command injection through user input', 'category': 'security'},
+            {'file': 'comments.php', 'description': 'Cross-site scripting in comment field', 'category': 'security'},
+            {'file': 'upload.go', 'description': 'Path traversal in file upload', 'category': 'security'},
         ]
         
         for finding in real_vulns:
@@ -172,9 +173,9 @@ class TestJSONParser:
 class TestPromptsModule:
     """Test the prompts module."""
     
-    def test_get_security_audit_prompt(self):
+    def test_get_code_review_prompt(self):
         """Test security audit prompt generation."""
-        from claudecode.prompts import get_security_audit_prompt
+        from claudecode.prompts import get_code_review_prompt
         
         pr_data = {
             'number': 123,
@@ -202,7 +203,7 @@ class TestPromptsModule:
         
         pr_diff = "diff --git a/test.py b/test.py\n+added line"
         
-        prompt = get_security_audit_prompt(pr_data, pr_diff)
+        prompt = get_code_review_prompt(pr_data, pr_diff)
         
         assert isinstance(prompt, str)
         assert 'security' in prompt.lower()
@@ -259,4 +260,3 @@ class TestDeploymentPRDetection:
         
         for title in non_deployment_titles:
             assert not re.match(deployment_pattern, title, re.IGNORECASE), f"Incorrectly matched non-deployment PR: {title}"
-

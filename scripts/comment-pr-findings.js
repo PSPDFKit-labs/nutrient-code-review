@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Script to comment on PRs with security findings from ClaudeCode
+ * Script to comment on PRs with code review findings from ClaudeCode
  */
 
 const fs = require('fs');
@@ -129,9 +129,10 @@ async function run() {
     for (const finding of newFindings) {
       const file = finding.file || finding.path;
       const line = finding.line || (finding.start && finding.start.line) || 1;
-      const message = finding.description || (finding.extra && finding.extra.message) || 'Security vulnerability detected';
+      const message = finding.description || (finding.extra && finding.extra.message) || 'Issue detected';
+      const title = finding.title || message;
       const severity = finding.severity || 'HIGH';
-      const category = finding.category || 'security_issue';
+      const category = finding.category || 'review_issue';
       
       // Check if this file is part of the PR diff
       if (!fileMap[file]) {
@@ -140,20 +141,22 @@ async function run() {
       }
       
       // Build the comment body
-      let commentBody = `🤖 **Security Issue: ${message}**\n\n`;
+      let commentBody = `🤖 **Code Review Finding: ${title}**\n\n`;
       commentBody += `**Severity:** ${severity}\n`;
       commentBody += `**Category:** ${category}\n`;
-      commentBody += `**Tool:** ClaudeCode AI Security Analysis\n`;
+      commentBody += `**Tool:** ClaudeCode AI Review\n`;
       
-      // Add exploit scenario if available
-      if (finding.exploit_scenario || (finding.extra && finding.extra.metadata && finding.extra.metadata.exploit_scenario)) {
-        const exploitScenario = finding.exploit_scenario || finding.extra.metadata.exploit_scenario;
-        commentBody += `\n**Exploit Scenario:** ${exploitScenario}\n`;
+      const extraMetadata = (finding.extra && finding.extra.metadata) || {};
+
+      // Add impact/exploit scenario if available
+      if (finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario) {
+        const impact = finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario;
+        commentBody += `\n**Impact:** ${impact}\n`;
       }
       
       // Add recommendation if available
-      if (finding.recommendation || (finding.extra && finding.extra.metadata && finding.extra.metadata.recommendation)) {
-        const recommendation = finding.recommendation || finding.extra.metadata.recommendation;
+      if (finding.recommendation || extraMetadata.recommendation) {
+        const recommendation = finding.recommendation || extraMetadata.recommendation;
         commentBody += `\n**Recommendation:** ${recommendation}\n`;
       }
       
@@ -179,7 +182,10 @@ async function run() {
     // Check if we've already commented on these findings
     const existingSecurityComments = comments.filter(comment => 
       comment.user.type === 'Bot' && 
-      comment.body && comment.body.includes('🤖 **Security Issue:')
+      comment.body && (
+        comment.body.includes('🤖 **Security Issue:') ||
+        comment.body.includes('🤖 **Code Review Finding:')
+      )
     );
     
     if (existingSecurityComments.length > 0) {

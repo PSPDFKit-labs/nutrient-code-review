@@ -11,19 +11,23 @@ class TestHardExclusionRules:
         dos_findings = [
             {
                 "title": "Potential Denial of Service",
-                "description": "This could lead to resource exhaustion"
+                "description": "This could lead to resource exhaustion",
+                "category": "security"
             },
             {
                 "title": "Resource consumption issue",
-                "description": "Unbounded loop could exhaust CPU resources"
+                "description": "Unbounded loop could exhaust CPU resources",
+                "category": "security"
             },
             {
                 "title": "Memory exhaustion",
-                "description": "This function could overwhelm memory with large inputs"
+                "description": "This function could overwhelm memory with large inputs",
+                "category": "security"
             },
             {
                 "title": "Stack overflow vulnerability",
-                "description": "Infinite recursion detected"
+                "description": "Infinite recursion detected",
+                "category": "security"
             }
         ]
         
@@ -37,7 +41,8 @@ class TestHardExclusionRules:
         finding = {
             "title": "Stack overflow exploit",
             "description": "This stack overflow can be exploited to execute arbitrary code",
-            "file": "exploit.c"  # Add C file so it's not excluded by memory safety rule
+            "file": "exploit.c",  # Add C file so it's not excluded by memory safety rule
+            "category": "security"
         }
         
         reason = HardExclusionRules.get_exclusion_reason(finding)
@@ -146,19 +151,23 @@ class TestHardExclusionRules:
         rate_limit_findings = [
             {
                 "title": "Missing rate limit",
-                "description": "API endpoint has no rate limiting"
+                "description": "API endpoint has no rate limiting",
+                "category": "security"
             },
             {
                 "title": "Rate limiting required",
-                "description": "Implement rate limiting for this endpoint"
+                "description": "Implement rate limiting for this endpoint",
+                "category": "security"
             },
             {
                 "title": "No rate limit",
-                "description": "Unlimited requests allowed"
+                "description": "Unlimited requests allowed",
+                "category": "security"
             },
             {
                 "title": "Add rate limiting",
-                "description": "This API needs rate limits"
+                "description": "This API needs rate limits",
+                "category": "security"
             }
         ]
         
@@ -172,19 +181,23 @@ class TestHardExclusionRules:
         resource_findings = [
             {
                 "title": "Security Issue",
-                "description": "Potential memory leak detected"
+                "description": "Potential memory leak detected",
+                "category": "security"
             },
             {
                 "title": "Security Issue",
-                "description": "Resource leak potential in file handling"
+                "description": "Resource leak potential in file handling",
+                "category": "security"
             },
             {
                 "title": "Security Issue",
-                "description": "Unclosed resource detected in function"
+                "description": "Unclosed resource detected in function",
+                "category": "security"
             },
             {
                 "title": "Security Issue",
-                "description": "File cleanup required - close resource"
+                "description": "File cleanup required - close resource",
+                "category": "security"
             }
         ]
         
@@ -192,21 +205,43 @@ class TestHardExclusionRules:
             reason = HardExclusionRules.get_exclusion_reason(finding)
             assert reason is not None
             assert "Resource management finding" in reason
+
+    def test_resource_pattern_not_excluded_for_non_security(self):
+        """Test that resource issues are kept for non-security categories."""
+        resource_findings = [
+            {
+                "title": "Potential memory leak detected",
+                "description": "Connections are not closed on error paths",
+                "category": "reliability"
+            },
+            {
+                "title": "Resource leak potential",
+                "description": "File handles remain open after exceptions",
+                "category": "performance"
+            }
+        ]
+
+        for finding in resource_findings:
+            reason = HardExclusionRules.get_exclusion_reason(finding)
+            assert reason is None
     
     def test_specific_resource_also_excluded(self):
         """Test that ALL resource issues are now excluded (including specific ones)."""
         specific_resources = [
             {
                 "title": "Database connection leak",
-                "description": "PostgreSQL connections not returned to pool"
+                "description": "PostgreSQL connections not returned to pool",
+                "category": "security"
             },
             {
                 "title": "Thread leak",
-                "description": "Thread pool exhaustion due to unclosed threads"
+                "description": "Thread pool exhaustion due to unclosed threads",
+                "category": "security"
             },
             {
                 "title": "Socket leak",
-                "description": "TCP sockets remain open after errors"
+                "description": "TCP sockets remain open after errors",
+                "category": "security"
             }
         ]
         
@@ -221,19 +256,23 @@ class TestHardExclusionRules:
         redirect_findings = [
             {
                 "title": "Open redirect vulnerability",
-                "description": "User input used in redirect without validation"
+                "description": "User input used in redirect without validation",
+                "category": "security"
             },
             {
                 "title": "Unvalidated redirect",
-                "description": "Redirect URL not validated"
+                "description": "Redirect URL not validated",
+                "category": "security"
             },
             {
                 "title": "Redirect vulnerability",
-                "description": "Possible redirect attack"
+                "description": "Possible redirect attack",
+                "category": "security"
             },
             {
                 "title": "Malicious redirect possible",
-                "description": "User-controlled redirect parameter"
+                "description": "User-controlled redirect parameter",
+                "category": "security"
             }
         ]
         
@@ -247,11 +286,13 @@ class TestHardExclusionRules:
         mixed_case_findings = [
             {
                 "title": "DENIAL OF SERVICE",
-                "description": "RESOURCE EXHAUSTION POSSIBLE"
+                "description": "RESOURCE EXHAUSTION POSSIBLE",
+                "category": "security"
             },
             {
                 "title": "Security Issue",
-                "description": "ADD INPUT VALIDATION"
+                "description": "ADD INPUT VALIDATION",
+                "category": "security"
             },
             {
                 "title": "Security Issue",
@@ -289,7 +330,8 @@ class TestHardExclusionRules:
         """Test findings that match multiple patterns."""
         finding = {
             "title": "DOS and validation issue",
-            "description": "Missing rate limit leads to resource exhaustion"
+            "description": "Missing rate limit leads to resource exhaustion",
+            "category": "security"
         }
         
         reason = HardExclusionRules.get_exclusion_reason(finding)
@@ -324,7 +366,8 @@ class TestHardExclusionRules:
         long_text = "A" * 10000  # 10k characters
         finding = {
             "title": "Long finding",
-            "description": long_text + " denial of service " + long_text
+            "description": long_text + " denial of service " + long_text,
+            "category": "security"
         }
         
         # Should handle long text efficiently
@@ -338,27 +381,32 @@ class TestHardExclusionRules:
             {
                 "title": "Buffer overflow vulnerability",
                 "description": "Potential buffer overflow in string handling",
-                "file": "app.py"
+                "file": "app.py",
+                "category": "security"
             },
             {
                 "title": "Out of bounds access",
                 "description": "Array out of bounds write detected",
-                "file": "server.js"
+                "file": "server.js",
+                "category": "security"
             },
             {
                 "title": "Memory corruption",
                 "description": "Use after free vulnerability found",
-                "file": "Main.java"
+                "file": "Main.java",
+                "category": "security"
             },
             {
                 "title": "Segmentation fault",
                 "description": "Null pointer dereference causes segfault",
-                "file": "handler.go"
+                "file": "handler.go",
+                "category": "security"
             },
             {
                 "title": "Integer overflow",
                 "description": "Integer overflow in calculation",
-                "file": "calc.rb"
+                "file": "calc.rb",
+                "category": "security"
             }
         ]
         
@@ -373,22 +421,26 @@ class TestHardExclusionRules:
             {
                 "title": "Buffer overflow",
                 "description": "Stack buffer overflow in strcpy",
-                "file": "main.c"
+                "file": "main.c",
+                "category": "security"
             },
             {
                 "title": "Out of bounds write",
                 "description": "Array index out of bounds",
-                "file": "parser.cc"
+                "file": "parser.cc",
+                "category": "security"
             },
             {
                 "title": "Memory safety",
                 "description": "Use after free in destructor",
-                "file": "object.cpp"
+                "file": "object.cpp",
+                "category": "security"
             },
             {
                 "title": "Bounds check missing",
                 "description": "No bounds checking on user input",
-                "file": "input.h"
+                "file": "input.h",
+                "category": "security"
             }
         ]
         
@@ -402,12 +454,14 @@ class TestHardExclusionRules:
             {
                 "title": "Buffer overflow",
                 "description": "Buffer overflow detected",
-                "file": "App.PY"  # Uppercase extension
+                "file": "App.PY",  # Uppercase extension
+                "category": "security"
             },
             {
                 "title": "Memory corruption",
                 "description": "Memory corruption issue",
-                "file": "SERVER.JS"  # All uppercase
+                "file": "SERVER.JS",  # All uppercase
+                "category": "security"
             }
         ]
         
@@ -422,12 +476,14 @@ class TestHardExclusionRules:
             {
                 "title": "Buffer overflow",
                 "description": "Buffer overflow detected",
-                "file": "Makefile"  # No extension
+                "file": "Makefile",  # No extension
+                "category": "security"
             },
             {
                 "title": "Memory corruption",
                 "description": "Memory corruption issue",
-                "file": ""  # Empty file path
+                "file": "",  # Empty file path
+                "category": "security"
             }
         ]
         

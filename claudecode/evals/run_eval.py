@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI for running SAST evaluation on a single PR."""
+"""CLI for running code review evaluation on a single PR."""
 
 import argparse
 import os
@@ -31,7 +31,7 @@ class EvalResult:
     success: bool
     runtime_seconds: float
     findings_count: int
-    detected_vulnerabilities: bool
+    detected_issues: bool
     
     # Optional fields
     error_message: str = ""
@@ -44,9 +44,9 @@ class EvalResult:
 
 
 def main():
-    """Main entry point for single PR SAST evaluation."""
+    """Main entry point for single PR code review evaluation."""
     parser = argparse.ArgumentParser(
-        description="Run SAST security evaluation on a single GitHub PR",
+        description="Run code review evaluation on a single GitHub PR",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
@@ -126,7 +126,7 @@ def main():
     print("EVALUATION RESULTS:")
     print(f"Success: {result.success}")
     print(f"Runtime: {result.runtime_seconds:.1f} seconds")
-    print(f"Vulnerabilities detected: {result.detected_vulnerabilities}")
+    print(f"Issues detected: {result.detected_issues}")
     print(f"Findings count: {result.findings_count}")
     
     if result.error_message:
@@ -140,8 +140,10 @@ def main():
                 print(f"    Category: {finding['category']}")
             if 'description' in finding:
                 print(f"    Description: {finding['description']}")
-            if 'exploit_scenario' in finding:
-                print(f"    Exploit: {finding['exploit_scenario']}")
+            if 'impact' in finding:
+                print(f"    Impact: {finding['impact']}")
+            elif 'exploit_scenario' in finding:
+                print(f"    Impact: {finding['exploit_scenario']}")
             if 'recommendation' in finding:
                 print(f"    Fix: {finding['recommendation']}")
             if 'confidence' in finding:

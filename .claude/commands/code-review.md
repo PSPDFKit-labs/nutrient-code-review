@@ -1,9 +1,9 @@
 ---
 allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh api:*), mcp__github_inline_comment__create_inline_comment
-description: Security review a pull request
+description: Code review a pull request
 ---
 
-Provide a security-focused code review for the given pull request.
+Provide a code review for the given pull request.
 
 Create a todo list before starting.
 
@@ -16,7 +16,7 @@ To do this, follow these steps precisely:
 1. Launch a haiku agent to check if any of the following are true:
    - The pull request is closed
    - The pull request is a draft
-   - The pull request does not need security review (e.g. automated PR, trivial change that is obviously correct)
+   - The pull request does not need code review (e.g. automated PR, trivial change that is obviously correct)
    - Claude has already commented on this PR (check `gh pr view <PR> --comments` for comments left by claude)
 
    If any condition is true, stop and do not proceed.
@@ -29,40 +29,39 @@ To do this, follow these steps precisely:
 
 3. Launch a sonnet agent to view the pull request and return a summary of the changes.
 
-4. Launch 4 agents in parallel to independently review the changes for SECURITY issues only. Each agent should return the list of issues, where each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md security rule", "security bug"). The agents should do the following:
+4. Launch 4 agents in parallel to independently review the changes. Each agent should return the list of issues, where each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md adherence", "bug"). The agents should do the following:
 
-   Agents 1 + 2: Security compliance sonnet agents
-   Audit changes for SECURITY-related CLAUDE.md compliance in parallel. Only flag violations of security-specific rules. Note: When evaluating CLAUDE.md compliance for a file, you should only consider CLAUDE.md files that share a file path with the file or parents.
+   Agents 1 + 2: CLAUDE.md compliance sonnet agents
+   Audit changes for CLAUDE.md compliance in parallel. Note: When evaluating CLAUDE.md compliance for a file, you should only consider CLAUDE.md files that share a file path with the file or parents.
 
-   Agent 3: Opus security bug agent (parallel subagent with agent 4)
-   Scan for obvious security vulnerabilities. Focus only on the diff itself without reading extra context. Flag only significant vulnerabilities; ignore nitpicks and likely false positives. Do not flag issues that you cannot validate without looking at context outside of the git diff.
+   Agent 3: Opus bug agent (parallel subagent with agent 4)
+   Scan for obvious bugs. Focus only on the diff itself without reading extra context. Flag only significant bugs; ignore nitpicks and likely false positives. Do not flag issues that you cannot validate without looking at context outside of the git diff.
 
-   Agent 4: Opus security bug agent (parallel subagent with agent 3)
-   Look for security problems that exist in the introduced code. This could be injection, auth bypass, data exposure, or unsafe deserialization. Only look for issues that fall within the changed code.
+   Agent 4: Opus bug agent (parallel subagent with agent 3)
+   Look for problems that exist in the introduced code. This could be security issues, incorrect logic, etc. Only look for issues that fall within the changed code.
 
-   **CRITICAL: We only want HIGH SIGNAL security issues.** Flag issues where:
-   - There is a clear, exploitable security vulnerability (e.g., injection, auth bypass, RCE, sensitive data exposure)
-   - The vulnerability is introduced or made worse by the changes
-   - Clear, unambiguous CLAUDE.md security violations where you can quote the exact rule being broken
+   **CRITICAL: We only want HIGH SIGNAL issues.** Flag issues where:
+   - The code will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)
+   - The code will definitely produce wrong results regardless of inputs (clear logic errors)
+   - Clear, unambiguous CLAUDE.md violations where you can quote the exact rule being broken
 
    Do NOT flag:
-   - General code quality or non-security bugs
-   - Security issues that depend on speculative inputs or unverified assumptions
-   - Denial of Service (DoS) or rate limiting issues without concrete exploitability
-   - Secrets or sensitive data stored on disk (handled elsewhere)
+   - Code style or quality concerns
+   - Potential issues that depend on specific inputs or state
+   - Subjective suggestions or improvements
 
    If you are not certain an issue is real, do not flag it. False positives erode trust and waste reviewer time.
 
    In addition to the above, each subagent should be told the PR title and description. This will help provide context regarding the author's intent.
 
-5. For each issue found in the previous step by agents 3 and 4, launch parallel subagents to validate the issue. These subagents should get the PR title and description along with a description of the issue. The agent's job is to review the issue to validate that the stated issue is truly an issue with high confidence. For example, if an issue such as "variable is not defined" was flagged, the subagent's job would be to validate that is actually true in the code. Another example would be CLAUDE.md issues. The agent should validate that the CLAUDE.md rule that was violated is scoped for this file and is actually violated. Use Opus subagents for security bugs and logic issues, and sonnet agents for CLAUDE.md violations.
+5. For each issue found in the previous step by agents 3 and 4, launch parallel subagents to validate the issue. These subagents should get the PR title and description along with a description of the issue. The agent's job is to review the issue to validate that the stated issue is truly an issue with high confidence. For example, if an issue such as "variable is not defined" was flagged, the subagent's job would be to validate that is actually true in the code. Another example would be CLAUDE.md issues. The agent should validate that the CLAUDE.md rule that was violated is scoped for this file and is actually violated. Use Opus subagents for bugs and logic issues, and sonnet agents for CLAUDE.md violations.
 
-6. Filter out any issues that were not validated in step 5. This step will give us our list of high signal security issues for our review.
+6. Filter out any issues that were not validated in step 5. This step will give us our list of high signal issues for our review.
 
 7. If issues were found, skip to step 8 to post inline comments directly.
 
    If NO issues were found, post a summary comment using `gh pr comment` (if `--comment` argument is provided):
-   "No security issues found. Checked for security vulnerabilities and CLAUDE.md security rules."
+   "No issues found. Checked for bugs and CLAUDE.md compliance."
 
 8. Create a list of all comments that you plan on leaving. This is only for you to make sure you are comfortable with the comments. Do not post this list anywhere.
 
@@ -80,8 +79,8 @@ Use this list when evaluating issues in Steps 4 and 5 (these are false positives
 - Something that appears to be a bug but is actually correct
 - Pedantic nitpicks that a senior engineer would not flag
 - Issues that a linter will catch (do not run the linter to verify)
-- General code quality concerns (non-security issues)
-- Security issues mentioned in CLAUDE.md but explicitly silenced in the code (e.g., via a lint ignore comment)
+- General code quality concerns (e.g., lack of test coverage, general security issues) unless explicitly required in CLAUDE.md
+- Issues mentioned in CLAUDE.md but explicitly silenced in the code (e.g., via a lint ignore comment)
 
 Notes:
 
@@ -91,9 +90,9 @@ Notes:
 
 ---
 
-## Security review
+## Code review
 
-No security issues found. Checked for security vulnerabilities and CLAUDE.md security rules.
+No issues found. Checked for bugs and CLAUDE.md compliance.
 
 ---
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pytest tests for SAST integration components.
+Pytest tests for code review integration components.
 """
 
 import pytest
@@ -94,8 +94,8 @@ class TestFilteringIntegration:
         )
         
         test_findings = [
-            {'description': 'SQL injection vulnerability', 'severity': 'HIGH'},
-            {'description': 'Missing rate limiting', 'severity': 'MEDIUM'},
+            {'description': 'SQL injection vulnerability', 'severity': 'HIGH', 'category': 'security'},
+            {'description': 'Missing rate limiting', 'severity': 'MEDIUM', 'category': 'security'},
         ]
         
         success, results, stats = filter_instance.filter_findings(test_findings)

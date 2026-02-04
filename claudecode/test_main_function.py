@@ -177,7 +177,7 @@ class TestMainFunction:
             assert 'Claude Code not available' in output['error']
             assert 'Claude not installed' in output['error']
     
-    @patch('claudecode.github_action_audit.get_security_audit_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
     @patch('claudecode.github_action_audit.FindingsFilter')
     @patch('claudecode.github_action_audit.SimpleClaudeRunner')
     @patch('claudecode.github_action_audit.GitHubActionClient')
@@ -210,13 +210,14 @@ class TestMainFunction:
             assert 'API error' in output['error']
     
     @patch('pathlib.Path.cwd')
-    @patch('claudecode.github_action_audit.get_security_audit_prompt')
+    @patch('claudecode.github_action_audit.get_security_review_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
     @patch('claudecode.github_action_audit.FindingsFilter')
     @patch('claudecode.github_action_audit.SimpleClaudeRunner')
     @patch('claudecode.github_action_audit.GitHubActionClient')
     def test_main_successful_audit_no_findings(self, mock_client_class, mock_runner_class,
-                                               mock_filter_class, mock_prompt_func, 
-                                               mock_cwd, capsys):
+                                               mock_filter_class, mock_code_prompt_func,
+                                               mock_security_prompt_func, mock_cwd, capsys):
         """Test successful audit with no findings."""
         # Setup mocks
         mock_client = Mock()
@@ -230,19 +231,34 @@ class TestMainFunction:
         
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_security_audit.return_value = (
-            True, 
-            "",
-            {
-                'findings': [],
-                'analysis_summary': {
-                    'files_reviewed': 5,
-                    'high_severity': 0,
-                    'medium_severity': 0,
-                    'low_severity': 0
+        mock_runner.run_code_review.side_effect = [
+            (
+                True,
+                "",
+                {
+                    'findings': [],
+                    'analysis_summary': {
+                        'files_reviewed': 5,
+                        'high_severity': 0,
+                        'medium_severity': 0,
+                        'low_severity': 0
+                    }
                 }
-            }
-        )
+            ),
+            (
+                True,
+                "",
+                {
+                    'findings': [],
+                    'analysis_summary': {
+                        'files_reviewed': 5,
+                        'high_severity': 0,
+                        'medium_severity': 0,
+                        'low_severity': 0
+                    }
+                }
+            )
+        ]
         mock_runner_class.return_value = mock_runner
         
         mock_filter = Mock()
@@ -257,7 +273,8 @@ class TestMainFunction:
         )
         mock_filter_class.return_value = mock_filter
         
-        mock_prompt_func.return_value = "security prompt"
+        mock_code_prompt_func.return_value = "review prompt"
+        mock_security_prompt_func.return_value = "security prompt"
         mock_cwd.return_value = Path('/tmp/repo')
         
         with patch.dict(os.environ, {
@@ -279,13 +296,14 @@ class TestMainFunction:
             assert output['filtering_summary']['total_original_findings'] == 0
     
     @patch('pathlib.Path.cwd')
-    @patch('claudecode.github_action_audit.get_security_audit_prompt')
+    @patch('claudecode.github_action_audit.get_security_review_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
     @patch('claudecode.github_action_audit.FindingsFilter')
     @patch('claudecode.github_action_audit.SimpleClaudeRunner')
     @patch('claudecode.github_action_audit.GitHubActionClient')
     def test_main_successful_audit_with_findings(self, mock_client_class, mock_runner_class,
-                                                mock_filter_class, mock_prompt_func,
-                                                mock_cwd, capsys):
+                                                mock_filter_class, mock_code_prompt_func,
+                                                mock_security_prompt_func, mock_cwd, capsys):
         """Test successful audit with high severity findings."""
         # Setup mocks
         mock_client = Mock()
@@ -315,19 +333,34 @@ class TestMainFunction:
         
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_security_audit.return_value = (
-            True,
-            "",
-            {
-                'findings': findings,
-                'analysis_summary': {
-                    'files_reviewed': 2,
-                    'high_severity': 1,
-                    'medium_severity': 1,
-                    'low_severity': 0
+        mock_runner.run_code_review.side_effect = [
+            (
+                True,
+                "",
+                {
+                    'findings': findings,
+                    'analysis_summary': {
+                        'files_reviewed': 2,
+                        'high_severity': 1,
+                        'medium_severity': 1,
+                        'low_severity': 0
+                    }
                 }
-            }
-        )
+            ),
+            (
+                True,
+                "",
+                {
+                    'findings': [],
+                    'analysis_summary': {
+                        'files_reviewed': 2,
+                        'high_severity': 0,
+                        'medium_severity': 0,
+                        'low_severity': 0
+                    }
+                }
+            )
+        ]
         mock_runner_class.return_value = mock_runner
         
         # Filter keeps only high severity
@@ -347,7 +380,8 @@ class TestMainFunction:
         )
         mock_filter_class.return_value = mock_filter
         
-        mock_prompt_func.return_value = "security prompt"
+        mock_code_prompt_func.return_value = "review prompt"
+        mock_security_prompt_func.return_value = "security prompt"
         mock_cwd.return_value = Path('/tmp/repo')
         
         with patch.dict(os.environ, {
@@ -370,11 +404,13 @@ class TestMainFunction:
             assert output['filtering_summary']['kept_findings'] == 1
     
     @patch('pathlib.Path.cwd')
-    @patch('claudecode.github_action_audit.get_security_audit_prompt')
+    @patch('claudecode.github_action_audit.get_security_review_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
     @patch('claudecode.github_action_audit.SimpleClaudeRunner')
     @patch('claudecode.github_action_audit.GitHubActionClient')
     def test_main_with_full_filter(self, mock_client_class, mock_runner_class,
-                                   mock_prompt_func, mock_cwd, capsys):
+                                   mock_code_prompt_func, mock_security_prompt_func,
+                                   mock_cwd, capsys):
         """Test main with full FindingsFilter (LLM-based)."""
         # Setup mocks
         mock_client = Mock()
@@ -391,10 +427,14 @@ class TestMainFunction:
         
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_security_audit.return_value = (True, "", {'findings': findings})
+        mock_runner.run_code_review.side_effect = [
+            (True, "", {'findings': findings}),
+            (True, "", {'findings': []})
+        ]
         mock_runner_class.return_value = mock_runner
         
-        mock_prompt_func.return_value = "prompt"
+        mock_code_prompt_func.return_value = "prompt"
+        mock_security_prompt_func.return_value = "security prompt"
         mock_cwd.return_value = Path('/tmp')
         
         # Mock FindingsFilter to return findings properly
@@ -432,11 +472,13 @@ class TestMainFunction:
                 assert output['findings'][0]['severity'] == 'HIGH'
     
     @patch('pathlib.Path.cwd')
-    @patch('claudecode.github_action_audit.get_security_audit_prompt')
+    @patch('claudecode.github_action_audit.get_security_review_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
     @patch('claudecode.github_action_audit.SimpleClaudeRunner')
     @patch('claudecode.github_action_audit.GitHubActionClient')
     def test_main_filter_failure_keeps_all_findings(self, mock_client_class, mock_runner_class,
-                                                    mock_prompt_func, mock_cwd, capsys):
+                                                    mock_code_prompt_func, mock_security_prompt_func,
+                                                    mock_cwd, capsys):
         """Test that filter failure keeps all findings with SimpleFindingsFilter."""
         # Setup mocks
         mock_client = Mock()
@@ -452,10 +494,14 @@ class TestMainFunction:
         
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_security_audit.return_value = (True, "", {'findings': findings})
+        mock_runner.run_code_review.side_effect = [
+            (True, "", {'findings': findings}),
+            (True, "", {'findings': []})
+        ]
         mock_runner_class.return_value = mock_runner
         
-        mock_prompt_func.return_value = "prompt"
+        mock_code_prompt_func.return_value = "prompt"
+        mock_security_prompt_func.return_value = "security prompt"
         mock_cwd.return_value = Path('/tmp')
         
         # Mock FindingsFilter to keep all findings
@@ -516,13 +562,14 @@ class TestAuditFailureModes:
     """Test various audit failure scenarios."""
     
     @patch('pathlib.Path.cwd')
-    @patch('claudecode.github_action_audit.get_security_audit_prompt')
+    @patch('claudecode.github_action_audit.get_security_review_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
     @patch('claudecode.github_action_audit.FindingsFilter')
     @patch('claudecode.github_action_audit.SimpleClaudeRunner')
     @patch('claudecode.github_action_audit.GitHubActionClient')
     def test_audit_failure(self, mock_client_class, mock_runner_class,
-                          mock_filter_class, mock_prompt_func,
-                          mock_cwd, capsys):
+                          mock_filter_class, mock_code_prompt_func,
+                          mock_security_prompt_func, mock_cwd, capsys):
         """Test when security audit fails."""
         mock_client = Mock()
         mock_client.get_pr_data.return_value = {'number': 123}
@@ -531,7 +578,7 @@ class TestAuditFailureModes:
         
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_security_audit.return_value = (
+        mock_runner.run_code_review.return_value = (
             False,
             "Claude execution failed",
             {}
@@ -539,7 +586,8 @@ class TestAuditFailureModes:
         mock_runner_class.return_value = mock_runner
         
         mock_filter_class.return_value = Mock()
-        mock_prompt_func.return_value = "prompt"
+        mock_code_prompt_func.return_value = "prompt"
+        mock_security_prompt_func.return_value = "security prompt"
         mock_cwd.return_value = Path('/tmp')
         
         with patch.dict(os.environ, {
@@ -554,5 +602,286 @@ class TestAuditFailureModes:
             
             captured = capsys.readouterr()
             output = json.loads(captured.out)
-            assert 'Security audit failed' in output['error']
+            assert 'Code review failed' in output['error']
             assert 'Claude execution failed' in output['error']
+
+
+class TestDualPassToggles:
+    """Test dual-pass review toggle functionality."""
+
+    @patch('pathlib.Path.cwd')
+    @patch('claudecode.github_action_audit.get_security_review_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
+    @patch('claudecode.github_action_audit.FindingsFilter')
+    @patch('claudecode.github_action_audit.SimpleClaudeRunner')
+    @patch('claudecode.github_action_audit.GitHubActionClient')
+    def test_only_general_review_when_security_disabled(self, mock_client_class, mock_runner_class,
+                                                        mock_filter_class, mock_code_prompt_func,
+                                                        mock_security_prompt_func, mock_cwd, capsys):
+        """Test that only general review runs when security review is disabled."""
+        mock_client = Mock()
+        mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
+        mock_client.get_pr_diff.return_value = "diff"
+        mock_client._is_excluded.return_value = False
+        mock_client_class.return_value = mock_client
+
+        findings = [{'file': 'test.py', 'line': 1, 'severity': 'MEDIUM', 'description': 'Issue'}]
+
+        mock_runner = Mock()
+        mock_runner.validate_claude_available.return_value = (True, "")
+        # Only one call should be made (general review only)
+        mock_runner.run_code_review.return_value = (True, "", {'findings': findings})
+        mock_runner_class.return_value = mock_runner
+
+        mock_filter = Mock()
+        mock_filter.filter_findings.return_value = (
+            True,
+            {'filtered_findings': findings, 'excluded_findings': [], 'analysis_summary': {}},
+            Mock()
+        )
+        mock_filter_class.return_value = mock_filter
+
+        mock_code_prompt_func.return_value = "general prompt"
+        mock_security_prompt_func.return_value = "security prompt"
+        mock_cwd.return_value = Path('/tmp')
+
+        with patch.dict(os.environ, {
+            'GITHUB_REPOSITORY': 'owner/repo',
+            'PR_NUMBER': '123',
+            'GITHUB_TOKEN': 'test-token',
+            'RUN_GENERAL_REVIEW': 'true',
+            'RUN_SECURITY_REVIEW': 'false'
+        }):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+            assert exc_info.value.code == 0  # No HIGH findings
+
+            # Verify only one review call was made
+            assert mock_runner.run_code_review.call_count == 1
+            # Verify security prompt was NOT called
+            mock_security_prompt_func.assert_not_called()
+            # Verify general prompt WAS called
+            mock_code_prompt_func.assert_called()
+
+    @patch('pathlib.Path.cwd')
+    @patch('claudecode.github_action_audit.get_security_review_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
+    @patch('claudecode.github_action_audit.FindingsFilter')
+    @patch('claudecode.github_action_audit.SimpleClaudeRunner')
+    @patch('claudecode.github_action_audit.GitHubActionClient')
+    def test_only_security_review_when_general_disabled(self, mock_client_class, mock_runner_class,
+                                                        mock_filter_class, mock_code_prompt_func,
+                                                        mock_security_prompt_func, mock_cwd, capsys):
+        """Test that only security review runs when general review is disabled."""
+        mock_client = Mock()
+        mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
+        mock_client.get_pr_diff.return_value = "diff"
+        mock_client._is_excluded.return_value = False
+        mock_client_class.return_value = mock_client
+
+        findings = [{'file': 'test.py', 'line': 1, 'severity': 'MEDIUM', 'description': 'Security issue'}]
+
+        mock_runner = Mock()
+        mock_runner.validate_claude_available.return_value = (True, "")
+        # Only one call should be made (security review only)
+        mock_runner.run_code_review.return_value = (True, "", {'findings': findings})
+        mock_runner_class.return_value = mock_runner
+
+        mock_filter = Mock()
+        mock_filter.filter_findings.return_value = (
+            True,
+            {'filtered_findings': findings, 'excluded_findings': [], 'analysis_summary': {}},
+            Mock()
+        )
+        mock_filter_class.return_value = mock_filter
+
+        mock_code_prompt_func.return_value = "general prompt"
+        mock_security_prompt_func.return_value = "security prompt"
+        mock_cwd.return_value = Path('/tmp')
+
+        with patch.dict(os.environ, {
+            'GITHUB_REPOSITORY': 'owner/repo',
+            'PR_NUMBER': '123',
+            'GITHUB_TOKEN': 'test-token',
+            'RUN_GENERAL_REVIEW': 'false',
+            'RUN_SECURITY_REVIEW': 'true'
+        }):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+            assert exc_info.value.code == 0  # No HIGH findings
+
+            # Verify only one review call was made
+            assert mock_runner.run_code_review.call_count == 1
+            # Verify general prompt was NOT called
+            mock_code_prompt_func.assert_not_called()
+            # Verify security prompt WAS called
+            mock_security_prompt_func.assert_called()
+
+    @patch('claudecode.github_action_audit.FindingsFilter')
+    @patch('claudecode.github_action_audit.SimpleClaudeRunner')
+    @patch('claudecode.github_action_audit.GitHubActionClient')
+    def test_error_when_both_passes_disabled(self, mock_client_class, mock_runner_class,
+                                             mock_filter_class, capsys):
+        """Test that error is raised when both review passes are disabled."""
+        mock_client = Mock()
+        mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
+        mock_client.get_pr_diff.return_value = "diff"
+        mock_client_class.return_value = mock_client
+
+        mock_runner = Mock()
+        mock_runner.validate_claude_available.return_value = (True, "")
+        mock_runner_class.return_value = mock_runner
+
+        mock_filter_class.return_value = Mock()
+
+        with patch.dict(os.environ, {
+            'GITHUB_REPOSITORY': 'owner/repo',
+            'PR_NUMBER': '123',
+            'GITHUB_TOKEN': 'test-token',
+            'RUN_GENERAL_REVIEW': 'false',
+            'RUN_SECURITY_REVIEW': 'false'
+        }):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+            assert exc_info.value.code == 2  # Configuration error
+
+            captured = capsys.readouterr()
+            output = json.loads(captured.out)
+            assert 'error' in output
+            assert 'RUN_GENERAL_REVIEW' in output['error']
+            assert 'RUN_SECURITY_REVIEW' in output['error']
+
+
+class TestReviewTypeMetadata:
+    """Test that findings are tagged with correct review_type."""
+
+    @patch('pathlib.Path.cwd')
+    @patch('claudecode.github_action_audit.get_security_review_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
+    @patch('claudecode.github_action_audit.FindingsFilter')
+    @patch('claudecode.github_action_audit.SimpleClaudeRunner')
+    @patch('claudecode.github_action_audit.GitHubActionClient')
+    def test_findings_have_correct_review_type(self, mock_client_class, mock_runner_class,
+                                               mock_filter_class, mock_code_prompt_func,
+                                               mock_security_prompt_func, mock_cwd, capsys):
+        """Test that findings from each pass have correct review_type metadata."""
+        mock_client = Mock()
+        mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
+        mock_client.get_pr_diff.return_value = "diff"
+        mock_client._is_excluded.return_value = False
+        mock_client_class.return_value = mock_client
+
+        general_findings = [
+            {'file': 'test.py', 'line': 1, 'severity': 'MEDIUM', 'description': 'General issue'}
+        ]
+        security_findings = [
+            {'file': 'auth.py', 'line': 5, 'severity': 'HIGH', 'description': 'Security issue'}
+        ]
+
+        mock_runner = Mock()
+        mock_runner.validate_claude_available.return_value = (True, "")
+        mock_runner.run_code_review.side_effect = [
+            (True, "", {'findings': general_findings}),
+            (True, "", {'findings': security_findings})
+        ]
+        mock_runner_class.return_value = mock_runner
+
+        # Filter passes through all findings
+        def filter_side_effect(findings, context):
+            return (
+                True,
+                {'filtered_findings': findings, 'excluded_findings': [], 'analysis_summary': {}},
+                Mock()
+            )
+
+        mock_filter = Mock()
+        mock_filter.filter_findings.side_effect = filter_side_effect
+        mock_filter_class.return_value = mock_filter
+
+        mock_code_prompt_func.return_value = "general prompt"
+        mock_security_prompt_func.return_value = "security prompt"
+        mock_cwd.return_value = Path('/tmp')
+
+        with patch.dict(os.environ, {
+            'GITHUB_REPOSITORY': 'owner/repo',
+            'PR_NUMBER': '123',
+            'GITHUB_TOKEN': 'test-token',
+            'RUN_GENERAL_REVIEW': 'true',
+            'RUN_SECURITY_REVIEW': 'true'
+        }):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+            assert exc_info.value.code == 1  # Has HIGH finding
+
+            captured = capsys.readouterr()
+            output = json.loads(captured.out)
+
+            # Check that we have findings from both passes
+            assert len(output['findings']) == 2
+
+            # Find the general finding and verify review_type
+            general_finding = next(f for f in output['findings'] if f['file'] == 'test.py')
+            assert general_finding['review_type'] == 'general'
+
+            # Find the security finding and verify review_type
+            security_finding = next(f for f in output['findings'] if f['file'] == 'auth.py')
+            assert security_finding['review_type'] == 'security'
+
+    @patch('pathlib.Path.cwd')
+    @patch('claudecode.github_action_audit.get_security_review_prompt')
+    @patch('claudecode.github_action_audit.get_code_review_prompt')
+    @patch('claudecode.github_action_audit.FindingsFilter')
+    @patch('claudecode.github_action_audit.SimpleClaudeRunner')
+    @patch('claudecode.github_action_audit.GitHubActionClient')
+    def test_review_type_not_overwritten_if_already_set(self, mock_client_class, mock_runner_class,
+                                                        mock_filter_class, mock_code_prompt_func,
+                                                        mock_security_prompt_func, mock_cwd, capsys):
+        """Test that review_type is not overwritten if finding already has it."""
+        mock_client = Mock()
+        mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
+        mock_client.get_pr_diff.return_value = "diff"
+        mock_client._is_excluded.return_value = False
+        mock_client_class.return_value = mock_client
+
+        # Finding already has review_type set (e.g., from a custom analyzer)
+        general_findings = [
+            {'file': 'test.py', 'line': 1, 'severity': 'MEDIUM', 'description': 'Issue', 'review_type': 'custom'}
+        ]
+
+        mock_runner = Mock()
+        mock_runner.validate_claude_available.return_value = (True, "")
+        mock_runner.run_code_review.side_effect = [
+            (True, "", {'findings': general_findings}),
+            (True, "", {'findings': []})
+        ]
+        mock_runner_class.return_value = mock_runner
+
+        mock_filter = Mock()
+        mock_filter.filter_findings.return_value = (
+            True,
+            {'filtered_findings': general_findings, 'excluded_findings': [], 'analysis_summary': {}},
+            Mock()
+        )
+        mock_filter_class.return_value = mock_filter
+
+        mock_code_prompt_func.return_value = "general prompt"
+        mock_security_prompt_func.return_value = "security prompt"
+        mock_cwd.return_value = Path('/tmp')
+
+        with patch.dict(os.environ, {
+            'GITHUB_REPOSITORY': 'owner/repo',
+            'PR_NUMBER': '123',
+            'GITHUB_TOKEN': 'test-token'
+        }):
+            with pytest.raises(SystemExit):
+                main()
+
+            captured = capsys.readouterr()
+            output = json.loads(captured.out)
+
+            # The existing review_type should be preserved (setdefault doesn't overwrite)
+            assert output['findings'][0]['review_type'] == 'custom'

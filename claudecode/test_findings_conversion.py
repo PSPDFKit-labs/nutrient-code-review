@@ -126,7 +126,7 @@ class TestFindingsConversionEdgeCases:
             {'severity': 'HIGH', 'description': 'Issue with [brackets] and (parens)'},
             {'severity': 'HIGH', 'description': 'Path: C:\\Users\\test\\file.py'},
             {'severity': 'HIGH', 'description': 'Regex pattern: .*$^[]{}'},
-            {'severity': 'HIGH', 'description': 'Missing rate limiting for API'},
+            {'severity': 'HIGH', 'description': 'Missing rate limiting for API', 'category': 'security'},
         ]
         
         filter = create_simple_filter()
@@ -139,10 +139,10 @@ class TestFindingsConversionEdgeCases:
     def test_case_sensitivity_in_exclusions(self):
         """Test case sensitivity in exclusion rules."""
         findings = [
-            {'severity': 'HIGH', 'description': 'DENIAL OF SERVICE attack'},
-            {'severity': 'HIGH', 'description': 'Denial Of Service issue'},
-            {'severity': 'HIGH', 'description': 'dos vulnerability'},
-            {'severity': 'HIGH', 'description': 'DoS attack vector'},
+            {'severity': 'HIGH', 'description': 'DENIAL OF SERVICE attack', 'category': 'security'},
+            {'severity': 'HIGH', 'description': 'Denial Of Service issue', 'category': 'security'},
+            {'severity': 'HIGH', 'description': 'dos vulnerability', 'category': 'security'},
+            {'severity': 'HIGH', 'description': 'DoS attack vector', 'category': 'security'},
         ]
         
         filter = create_simple_filter()
@@ -298,7 +298,8 @@ class TestHardExclusionRulesEdgeCases:
         """Test findings that match multiple exclusion patterns."""
         finding = {
             'severity': 'HIGH',
-            'description': 'Denial of service via rate limiting bypass allows brute force attack'
+            'description': 'Denial of service via rate limiting bypass allows brute force attack',
+            'category': 'security'
         }
         
         # Matches both DOS and rate limiting patterns
@@ -309,9 +310,9 @@ class TestHardExclusionRulesEdgeCases:
     def test_pattern_boundary_matching(self):
         """Test pattern matching at word boundaries."""
         findings = [
-            {'severity': 'HIGH', 'description': 'dosomething() function'},  # Should not match DOS
-            {'severity': 'HIGH', 'description': 'windows path issue'},  # Should not match
-            {'severity': 'HIGH', 'description': 'pseudorandom number'},  # Should not match
+            {'severity': 'HIGH', 'description': 'dosomething() function', 'category': 'security'},  # Should not match DOS
+            {'severity': 'HIGH', 'description': 'windows path issue', 'category': 'security'},  # Should not match
+            {'severity': 'HIGH', 'description': 'pseudorandom number', 'category': 'security'},  # Should not match
         ]
         
         filter = create_simple_filter()
@@ -324,8 +325,8 @@ class TestHardExclusionRulesEdgeCases:
     def test_html_entities_in_description(self):
         """Test findings with HTML entities."""
         findings = [
-            {'severity': 'HIGH', 'description': 'XSS via &lt;script&gt; tag'},
-            {'severity': 'HIGH', 'description': 'Missing rate limiting &amp; throttling'},
+            {'severity': 'HIGH', 'description': 'XSS via &lt;script&gt; tag', 'category': 'security'},
+            {'severity': 'HIGH', 'description': 'Missing rate limiting &amp; throttling', 'category': 'security'},
         ]
         
         filter = create_simple_filter()
@@ -343,13 +344,15 @@ class TestHardExclusionRulesEdgeCases:
                 'severity': 'HIGH',
                 'description': '''SQL injection vulnerability
                 in user input handling.
-                This could lead to data exposure.'''
+                This could lead to data exposure.''',
+                'category': 'security'
             },
             {
                 'severity': 'HIGH',
                 'description': '''Performance issue that could
                 cause denial of service under
-                heavy load conditions.'''
+                heavy load conditions.''',
+                'category': 'security'
             }
         ]
         
@@ -368,13 +371,13 @@ class TestFilteringCombinations:
     def test_mixed_valid_invalid_findings(self):
         """Test mix of valid, invalid, and excludable findings."""
         findings = [
-            {'severity': 'HIGH', 'description': 'SQL injection'},  # Valid
+            {'severity': 'HIGH', 'description': 'SQL injection', 'category': 'security'},  # Valid
             {'description': 'Missing severity'},  # Valid (no exclusion pattern)
-            {'severity': 'HIGH', 'description': 'Missing rate limiting'},  # Excludable
-            {'severity': 'MEDIUM', 'description': 'XSS vulnerability'},  # Valid
-            {'severity': 'LOW', 'description': 'Denial of service attack'},  # Excludable
+            {'severity': 'HIGH', 'description': 'Missing rate limiting', 'category': 'security'},  # Excludable
+            {'severity': 'MEDIUM', 'description': 'XSS vulnerability', 'category': 'security'},  # Valid
+            {'severity': 'LOW', 'description': 'Denial of service attack', 'category': 'security'},  # Excludable
             {'severity': '', 'description': ''},  # Valid (no exclusion pattern)
-            {'severity': 'HIGH', 'description': 'RCE possibility'},  # Valid
+            {'severity': 'HIGH', 'description': 'RCE possibility', 'category': 'security'},  # Valid
         ]
         
         filter = create_simple_filter()

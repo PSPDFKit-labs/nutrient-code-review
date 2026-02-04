@@ -1,12 +1,12 @@
 """
-ClaudeCode - AI-Powered PR Security Audit Tool
+ClaudeCode - AI-Powered PR Code Review Tool
 
-A standalone security audit tool that uses Claude Code for comprehensive
-security analysis of GitHub pull requests.
+A standalone review tool that uses Claude Code for comprehensive
+analysis of GitHub pull requests.
 """
 
 __version__ = "1.0.0"
-__author__ = "Anthropic Security Team"
+__author__ = "Anthropic"
 
 # Import main components for easier access
 from claudecode.github_action_audit import (

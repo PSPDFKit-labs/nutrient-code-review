@@ -1,13 +1,13 @@
 """Unit tests for the prompts module."""
 
-from claudecode.prompts import get_security_audit_prompt
+from claudecode.prompts import get_code_review_prompt, get_security_review_prompt
 
 
 class TestPrompts:
     """Test prompt generation functions."""
     
-    def test_get_security_audit_prompt_basic(self):
-        """Test basic security audit prompt generation."""
+    def test_get_code_review_prompt_basic(self):
+        """Test basic code review prompt generation."""
         pr_data = {
             "number": 123,
             "title": "Add new feature",
@@ -41,7 +41,7 @@ diff --git a/app.py b/app.py
 +    return result
 """
         
-        prompt = get_security_audit_prompt(pr_data, pr_diff)
+        prompt = get_code_review_prompt(pr_data, pr_diff)
         
         # Check that prompt contains expected elements
         assert isinstance(prompt, str)
@@ -51,8 +51,46 @@ diff --git a/app.py b/app.py
         assert "testuser" in prompt  # Author
         assert "app.py" in prompt  # File name
         assert "eval(user_input)" in prompt  # The actual diff content
+
+    def test_get_security_review_prompt_basic(self):
+        """Test basic security review prompt generation."""
+        pr_data = {
+            "number": 222,
+            "title": "Harden auth flow",
+            "body": "Tighten auth checks and validation",
+            "user": "security-team",
+            "changed_files": 1,
+            "additions": 12,
+            "deletions": 4,
+            "head": {
+                "repo": {
+                    "full_name": "owner/repo"
+                }
+            },
+            "files": [
+                {
+                    "filename": "auth.py",
+                    "status": "modified",
+                    "additions": 12,
+                    "deletions": 4
+                }
+            ]
+        }
+
+        pr_diff = """
+diff --git a/auth.py b/auth.py
+@@ -1,3 +1,7 @@
+ def login(user, password):
+     return authenticate(user, password)
+"""
+
+        prompt = get_security_review_prompt(pr_data, pr_diff)
+
+        assert isinstance(prompt, str)
+        assert "security review" in prompt.lower()
+        assert "auth.py" in prompt
     
-    def test_get_security_audit_prompt_empty_body(self):
+    def test_get_code_review_prompt_empty_body(self):
         """Test prompt generation with empty PR body."""
         pr_data = {
             "number": 456,
@@ -72,14 +110,14 @@ diff --git a/app.py b/app.py
         
         pr_diff = "diff --git a/test.js b/test.js"
         
-        prompt = get_security_audit_prompt(pr_data, pr_diff)
+        prompt = get_code_review_prompt(pr_data, pr_diff)
         
         assert isinstance(prompt, str)
         assert "456" in prompt
         assert "Quick fix" in prompt
         assert "author" in prompt
     
-    def test_get_security_audit_prompt_multiple_files(self):
+    def test_get_code_review_prompt_multiple_files(self):
         """Test prompt generation with multiple files."""
         pr_data = {
             "number": 789,
@@ -127,7 +165,7 @@ diff --git a/config.yaml b/config.yaml
 +  password: "hardcoded_password"
 """
         
-        prompt = get_security_audit_prompt(pr_data, pr_diff)
+        prompt = get_code_review_prompt(pr_data, pr_diff)
         
         # Check all files are mentioned
         assert "auth.py" in prompt
@@ -139,7 +177,7 @@ diff --git a/config.yaml b/config.yaml
         assert "added" in prompt.lower()
         assert "deleted" in prompt.lower()
     
-    def test_get_security_audit_prompt_special_characters(self):
+    def test_get_code_review_prompt_special_characters(self):
         """Test prompt generation with special characters."""
         pr_data = {
             "number": 999,
@@ -172,14 +210,14 @@ diff --git a/src/db/queries.py b/src/db/queries.py
 +    cursor.execute(query, (user_id,))
 """
         
-        prompt = get_security_audit_prompt(pr_data, pr_diff)
+        prompt = get_code_review_prompt(pr_data, pr_diff)
         
         # Check special characters are preserved
         assert "user's" in prompt
         assert "user-with-dash" in prompt
         assert "src/db/queries.py" in prompt
     
-    def test_get_security_audit_prompt_no_files(self):
+    def test_get_code_review_prompt_no_files(self):
         """Test prompt generation with no files (edge case)."""
         pr_data = {
             "number": 111,
@@ -199,13 +237,13 @@ diff --git a/src/db/queries.py b/src/db/queries.py
         
         pr_diff = ""  # Empty diff
         
-        prompt = get_security_audit_prompt(pr_data, pr_diff)
+        prompt = get_code_review_prompt(pr_data, pr_diff)
         
         assert isinstance(prompt, str)
         assert "111" in prompt
         assert "Documentation update" in prompt
     
-    def test_get_security_audit_prompt_structure(self):
+    def test_get_code_review_prompt_structure(self):
         """Test that prompt has expected structure."""
         pr_data = {
             "number": 42,
@@ -232,7 +270,7 @@ diff --git a/src/db/queries.py b/src/db/queries.py
         
         pr_diff = "diff --git a/test.py b/test.py\n+print('test')"
         
-        prompt = get_security_audit_prompt(pr_data, pr_diff)
+        prompt = get_code_review_prompt(pr_data, pr_diff)
         
         # Should contain sections for metadata and diff
         assert "PR #" in prompt or "Pull Request" in prompt
@@ -243,7 +281,7 @@ diff --git a/src/db/queries.py b/src/db/queries.py
         # Should contain the actual diff
         assert pr_diff in prompt or "print('test')" in prompt
     
-    def test_get_security_audit_prompt_long_diff(self):
+    def test_get_code_review_prompt_long_diff(self):
         """Test prompt generation with very long diff."""
         pr_data = {
             "number": 12345,
@@ -276,7 +314,7 @@ diff --git a/src/db/queries.py b/src/db/queries.py
             for i in range(10)
         ])
         
-        prompt = get_security_audit_prompt(pr_data, pr_diff)
+        prompt = get_code_review_prompt(pr_data, pr_diff)
         
         # Should handle large diffs without error
         assert isinstance(prompt, str)
@@ -284,7 +322,7 @@ diff --git a/src/db/queries.py b/src/db/queries.py
         assert "12345" in prompt
         assert "Major refactoring" in prompt
     
-    def test_get_security_audit_prompt_unicode(self):
+    def test_get_code_review_prompt_unicode(self):
         """Test prompt generation with unicode characters."""
         pr_data = {
             "number": 666,
@@ -316,7 +354,7 @@ diff --git a/émojis.py b/émojis.py
 +    return "🚨" not in text
 """
         
-        prompt = get_security_audit_prompt(pr_data, pr_diff)
+        prompt = get_code_review_prompt(pr_data, pr_diff)
         
         # Check unicode is preserved
         assert "🎉" in prompt  # Title emoji
