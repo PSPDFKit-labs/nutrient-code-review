@@ -53,6 +53,11 @@ inputs:
     required: false
     default: ''
 
+  dismiss-stale-reviews:
+    description: 'Dismiss previous bot reviews when posting a new review (useful for follow-up commits). If false, skips posting when existing review comments are found.'
+    required: false
+    default: 'true'
+
 outputs:
   findings-count:
     description: 'Number of code review findings'
@@ -330,6 +335,7 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
         CLAUDECODE_FINDINGS: ${{ steps.claudecode-scan.outputs.findings_count }}
         SILENCE_CLAUDECODE_COMMENTS: ${{ steps.claudecode-check.outputs.silence_claudecode_comments }}
+        DISMISS_STALE_REVIEWS: ${{ inputs.dismiss-stale-reviews }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         node "$ACTION_PATH/scripts/comment-pr-findings.js"

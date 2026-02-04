@@ -75,7 +75,7 @@ function addReactionsToReview(reviewId) {
   try {
     // Get all comments from the review
     const reviewComments = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews/${reviewId}/comments`);
-    
+
     if (reviewComments && Array.isArray(reviewComments)) {
       for (const comment of reviewComments) {
         if (comment.id) {
@@ -85,6 +85,42 @@ function addReactionsToReview(reviewId) {
     }
   } catch (error) {
     console.error(`Failed to get review comments for review ${reviewId}:`, error.message);
+  }
+}
+
+// Helper function to dismiss stale bot reviews
+function dismissStaleReviews() {
+  try {
+    const reviews = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`);
+
+    if (!reviews || !Array.isArray(reviews)) {
+      return 0;
+    }
+
+    let dismissedCount = 0;
+    for (const review of reviews) {
+      const isDismissible = review.state === 'APPROVED' || review.state === 'CHANGES_REQUESTED';
+      const isBot = review.user && review.user.type === 'Bot';
+
+      if (isBot && isDismissible) {
+        try {
+          ghApi(
+            `/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews/${review.id}/dismissals`,
+            'PUT',
+            { message: 'Dismissed: New review posted for updated changes.' }
+          );
+          console.log(`Dismissed stale review ${review.id}`);
+          dismissedCount++;
+        } catch (dismissError) {
+          console.error(`Failed to dismiss review ${review.id}:`, dismissError.message);
+        }
+      }
+    }
+
+    return dismissedCount;
+  } catch (error) {
+    console.error('Failed to get reviews for dismissal:', error.message);
+    return 0;
   }
 }
 
@@ -260,11 +296,18 @@ async function run() {
       console.log('No inline comments to add; posting summary review only');
     }
 
-    if (reviewComments.length > 0) {
-      // Check for existing review comments to avoid duplicates
+    // Handle existing reviews based on configuration
+    const dismissStaleReviewsEnabled = process.env.DISMISS_STALE_REVIEWS === 'true';
+
+    if (dismissStaleReviewsEnabled) {
+      const dismissedCount = dismissStaleReviews();
+      if (dismissedCount > 0) {
+        console.log(`Dismissed ${dismissedCount} stale review(s)`);
+      }
+    } else if (reviewComments.length > 0) {
+      // Legacy behavior: skip if existing comments found
       const comments = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/comments`);
 
-      // Check if we've already commented on these findings
       const existingSecurityComments = comments.filter(comment =>
         comment.user.type === 'Bot' &&
         comment.body && (

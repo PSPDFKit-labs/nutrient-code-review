@@ -847,4 +847,123 @@ describe('comment-pr-findings.js', () => {
       expect(consoleLogSpy).toHaveBeenCalledWith('No inline comments to add; posting summary review only');
     });
   });
+
+  describe('Stale Review Handling', () => {
+    test('should dismiss stale reviews when DISMISS_STALE_REVIEWS is true', async () => {
+      process.env.DISMISS_STALE_REVIEWS = 'true';
+
+      const mockFindings = [{
+        file: 'test.py',
+        line: 10,
+        description: 'Test issue',
+        severity: 'HIGH',
+        category: 'security'
+      }];
+
+      const mockPrFiles = [{ filename: 'test.py', patch: '@@ -10,1 +10,1 @@' }];
+
+      const mockReviews = [
+        { id: 101, state: 'CHANGES_REQUESTED', user: { type: 'Bot' } },
+        { id: 102, state: 'APPROVED', user: { type: 'Bot' } },
+        { id: 103, state: 'COMMENTED', user: { type: 'Bot' } }, // Should not be dismissed
+        { id: 104, state: 'CHANGES_REQUESTED', user: { type: 'User' } } // Should not be dismissed
+      ];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: { number: 123, head: { sha: 'abc123' } }
+          });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(mockFindings);
+        }
+      });
+
+      let dismissedReviews = [];
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/reviews') && method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(mockReviews), stderr: '' };
+          }
+          if (endpoint.includes('/dismissals') && method === 'PUT') {
+            const reviewId = endpoint.match(/reviews\/(\d+)\/dismissals/)[1];
+            dismissedReviews.push(parseInt(reviewId));
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(dismissedReviews).toContain(101);
+      expect(dismissedReviews).toContain(102);
+      expect(dismissedReviews).not.toContain(103); // COMMENTED state
+      expect(dismissedReviews).not.toContain(104); // User review
+      expect(consoleLogSpy).toHaveBeenCalledWith('Dismissed stale review 101');
+      expect(consoleLogSpy).toHaveBeenCalledWith('Dismissed stale review 102');
+    });
+
+    test('should skip posting when existing comments found and DISMISS_STALE_REVIEWS is false', async () => {
+      process.env.DISMISS_STALE_REVIEWS = 'false';
+
+      const mockFindings = [{
+        file: 'test.py',
+        line: 10,
+        description: 'Test issue',
+        severity: 'HIGH',
+        category: 'security'
+      }];
+
+      const mockPrFiles = [{ filename: 'test.py', patch: '@@ -10,1 +10,1 @@' }];
+
+      const mockExistingComments = [{
+        id: 1,
+        user: { type: 'Bot' },
+        body: '🤖 **Code Review Finding: Test**'
+      }];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: { number: 123, head: { sha: 'abc123' } }
+          });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(mockFindings);
+        }
+      });
+
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(mockExistingComments), stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(consoleLogSpy).toHaveBeenCalledWith('Found 1 existing security comments, skipping to avoid duplicates');
+    });
+  });
 });
