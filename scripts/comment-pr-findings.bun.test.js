@@ -435,13 +435,9 @@ describe('comment-pr-findings.js', () => {
       const mockFindings = [{
         file: 'test.py',
         line: 10,
-        message: 'Insecure pickle usage detected',
+        description: 'Insecure pickle usage detected',
         severity: 'HIGH',
-        metadata: {
-          vulnerability_type: 'security_issue',
-          tool: 'ClaudeCode AI Security Analysis',
-          check_id: 'pickle-insecure-usage'
-        }
+        category: 'security'
       }];
 
       const mockPrFiles = [{
@@ -491,8 +487,8 @@ describe('comment-pr-findings.js', () => {
       const comment = capturedReviewData.comments[0];
       expect(comment.body).toContain('🤖 **Code Review Finding:');
       expect(comment.body).toContain('**Severity:** HIGH');
-      expect(comment.body).toContain('**Category:** security_issue');
-      expect(comment.body).toContain('**Tool:** ClaudeCode AI Security Analysis');
+      expect(comment.body).toContain('**Category:** security');
+      expect(comment.body).toContain('**Tool:** ClaudeCode AI Review');
       expect(consoleLogSpy).toHaveBeenCalledWith('Created review with 1 inline comments');
     });
   });
