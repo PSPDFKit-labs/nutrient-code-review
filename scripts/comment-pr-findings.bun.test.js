@@ -551,6 +551,70 @@ describe('comment-pr-findings.js', () => {
       expect(comment.body).toContain('data = json.loads(user_input)');
       expect(comment.body).toContain('```');
     });
+
+    test('should include start_line for multi-line suggestions', async () => {
+      const mockFindings = [{
+        file: 'test.py',
+        line: 12,
+        description: 'Unsafe database query',
+        severity: 'HIGH',
+        category: 'security',
+        recommendation: 'Use parameterized queries',
+        suggestion: 'cursor.execute(\n    "SELECT * FROM users WHERE id = ?",\n    (user_id,)\n)',
+        suggestion_start_line: 10,
+        suggestion_end_line: 12
+      }];
+
+      const mockPrFiles = [{
+        filename: 'test.py',
+        patch: '@@ -10,3 +10,3 @@'
+      }];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: { number: 123, head: { sha: 'abc123' } }
+          });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(mockFindings);
+        }
+      });
+
+      let capturedReviewData;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+            return { status: 0, stdout: '[]', stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              capturedReviewData = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(capturedReviewData).toBeDefined();
+      expect(capturedReviewData.comments).toHaveLength(1);
+
+      const comment = capturedReviewData.comments[0];
+      expect(comment.body).toContain('```suggestion');
+      expect(comment.start_line).toBe(10);
+      expect(comment.line).toBe(12);
+      expect(comment.start_side).toBe('RIGHT');
+    });
   });
 
   describe('Error Handling', () => {
