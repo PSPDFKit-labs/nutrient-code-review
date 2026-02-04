@@ -157,8 +157,7 @@ describe('comment-pr-findings.js', () => {
 
       expect(reviewDataCaptured).toBeTruthy();
       expect(reviewDataCaptured.event).toBe('APPROVE');
-      expect(reviewDataCaptured.body).toContain('Summary: No findings were reported.');
-      expect(reviewDataCaptured.body).toContain('Assessment:');
+      expect(reviewDataCaptured.body).toContain('No issues found');
     });
 
     test('should process findings correctly', async () => {
@@ -231,8 +230,8 @@ describe('comment-pr-findings.js', () => {
       expect(reviewDataCaptured).toBeTruthy();
       expect(reviewDataCaptured.comments).toHaveLength(1);
       expect(reviewDataCaptured.event).toBe('REQUEST_CHANGES');
-      expect(reviewDataCaptured.body).toContain('Summary: 1 finding');
-      expect(reviewDataCaptured.body).toContain('Assessment:');
+      expect(reviewDataCaptured.body).toContain('Found 1');
+      expect(reviewDataCaptured.body).toContain('issue');
     });
 
     test('should approve when findings are medium or low only', async () => {
@@ -299,8 +298,8 @@ describe('comment-pr-findings.js', () => {
 
       expect(reviewDataCaptured).toBeTruthy();
       expect(reviewDataCaptured.event).toBe('APPROVE');
-      expect(reviewDataCaptured.body).toContain('Summary: 2 findings');
-      expect(reviewDataCaptured.body).toContain('HIGH: 0');
+      expect(reviewDataCaptured.body).toContain('Found 2');
+      expect(reviewDataCaptured.body).toContain('Consider addressing');
       expect(reviewDataCaptured.comments).toHaveLength(2);
     });
 
@@ -350,7 +349,7 @@ describe('comment-pr-findings.js', () => {
 
       expect(reviewDataCaptured).toBeTruthy();
       expect(reviewDataCaptured.event).toBe('REQUEST_CHANGES');
-      expect(reviewDataCaptured.body).toContain('Summary: 1 finding');
+      expect(reviewDataCaptured.body).toContain('Found 1');
       expect(reviewDataCaptured.comments).toBeUndefined();
     });
   });

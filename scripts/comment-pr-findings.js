@@ -125,35 +125,47 @@ async function run() {
 
     function buildReviewSummary(findings) {
       const total = findings.length;
-      const files = new Set();
+      const categories = {};
+
       for (const finding of findings) {
-        const file = finding.file || finding.path;
-        if (file) {
-          files.add(file);
+        const category = finding.category || 'other';
+        if (!categories[category]) {
+          categories[category] = [];
         }
+        categories[category].push(finding);
       }
 
       const { high, medium, low } = countSeverities(findings);
-      let summaryLine;
 
       if (total === 0) {
-        summaryLine = 'Summary: No findings were reported.';
-      } else {
-        const fileCount = files.size;
-        const fileText = fileCount > 0 ? ` across ${fileCount} file${fileCount === 1 ? '' : 's'}` : '';
-        summaryLine = `Summary: ${total} finding${total === 1 ? '' : 's'}${fileText} (HIGH: ${high}, MEDIUM: ${medium}, LOW: ${low}).`;
+        return 'No issues found. Changes look good.';
       }
 
-      let assessmentLine;
+      // Build concise category summary
+      const categoryNames = Object.keys(categories).map(c => c.toLowerCase());
+      let issueTypes;
+      if (categoryNames.length === 1) {
+        issueTypes = categoryNames[0];
+      } else if (categoryNames.length === 2) {
+        issueTypes = categoryNames.join(' and ');
+      } else {
+        const last = categoryNames.pop();
+        issueTypes = categoryNames.join(', ') + ', and ' + last;
+      }
+
+      // Build the summary
+      let summary = `Found ${total} ${issueTypes} issue${total === 1 ? '' : 's'}. `;
+
+      // Recommendation
       if (high > 0) {
-        assessmentLine = 'Assessment: High-severity issues were found that should be addressed before merge.';
-      } else if (total > 0) {
-        assessmentLine = 'Assessment: Changes look acceptable overall; consider addressing the findings.';
+        summary += 'Please address the high-severity issues before merging.';
+      } else if (medium > 0) {
+        summary += 'Consider addressing the suggestions in the comments.';
       } else {
-        assessmentLine = 'Assessment: Changes look good; no high-severity issues detected.';
+        summary += 'Minor suggestions noted in comments.';
       }
 
-      return `${summaryLine}\n${assessmentLine}`;
+      return summary;
     }
 
     const { high: highSeverityCount } = countSeverities(newFindings);
