@@ -67,7 +67,7 @@ This action is not hardened against prompt injection attacks and should only be 
 | `custom-security-scan-instructions` | Path to custom security scan instructions text file to append to the security section | None | No |
 | `dismiss-stale-reviews` | Dismiss previous bot reviews when posting a new review (useful for follow-up commits) | `true` | No |
 | `skip-draft-prs` | Skip code review on draft pull requests | `true` | No |
-| `require-label` | Only run review if this label is present. Leave empty to review all PRs. Add `labeled` to your workflow `pull_request` types to trigger on label addition. | None | No |
+| `require-label` | When set, the `labeled` trigger only runs if this specific label was added. Other triggers (`opened`, `synchronize`, `reopened`) always run regardless. Add `labeled` to your workflow `pull_request` types to enable on-demand reviews via label. | None | No |
 
 ### Action Outputs
 

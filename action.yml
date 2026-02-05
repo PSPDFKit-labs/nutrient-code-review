@@ -64,7 +64,7 @@ inputs:
     default: 'true'
 
   require-label:
-    description: 'Only run review if this label is present on the PR. Leave empty to review all PRs. To trigger on label addition, add "labeled" to your workflow pull_request types.'
+    description: 'When set, the "labeled" trigger will only run if this specific label was added. Other triggers (opened, synchronize, reopened) always run regardless of this setting. Add "labeled" to your workflow pull_request types to enable on-demand reviews via label.'
     required: false
     default: ''
 
@@ -113,6 +113,7 @@ runs:
         IS_DRAFT: ${{ github.event.pull_request.draft }}
         REQUIRE_LABEL: ${{ inputs.require-label }}
         PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        EVENT_ACTION: ${{ github.event.action }}
       run: |
         # Check if ClaudeCode should be enabled
         ENABLE_CLAUDECODE="true"
@@ -123,12 +124,13 @@ runs:
           PR_NUMBER="$PR_NUMBER"
           CACHE_HIT="${{ steps.claudecode-history.outputs.cache-hit }}"
 
-          # Check if required label is present
-          if [ -n "$REQUIRE_LABEL" ]; then
+          # Check label requirement only for 'labeled' trigger
+          # Other triggers (opened, synchronize, reopened) run without label check
+          if [ "$EVENT_ACTION" == "labeled" ] && [ -n "$REQUIRE_LABEL" ]; then
             if echo "$PR_LABELS" | jq -e --arg label "$REQUIRE_LABEL" 'index($label) != null' > /dev/null 2>&1; then
-              echo "Required label '$REQUIRE_LABEL' found on PR #$PR_NUMBER"
+              echo "Required label '$REQUIRE_LABEL' found on PR #$PR_NUMBER (triggered by label addition)"
             else
-              echo "Skipping code review: required label '$REQUIRE_LABEL' not found on PR #$PR_NUMBER"
+              echo "Skipping code review: 'labeled' trigger requires label '$REQUIRE_LABEL', but it was not the label added"
               ENABLE_CLAUDECODE="false"
             fi
           fi
