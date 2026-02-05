@@ -68,6 +68,11 @@ inputs:
     required: false
     default: ''
 
+  max-diff-lines:
+    description: 'Maximum number of diff lines to review. PRs exceeding this limit will be skipped with a warning. Set to 0 to disable limit. Default 5000 keeps context under 50% of token limit.'
+    required: false
+    default: '5000'
+
 outputs:
   findings-count:
     description: 'Number of code review findings'
@@ -227,6 +232,7 @@ runs:
         CUSTOM_SECURITY_SCAN_INSTRUCTIONS: ${{ inputs.custom-security-scan-instructions }}
         CLAUDE_MODEL: ${{ inputs.claude-model }}
         CLAUDECODE_TIMEOUT: ${{ inputs.claudecode-timeout }}
+        MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         echo "Running ClaudeCode AI code review analysis..."

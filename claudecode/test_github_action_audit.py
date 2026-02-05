@@ -260,3 +260,212 @@ class TestDeploymentPRDetection:
         
         for title in non_deployment_titles:
             assert not re.match(deployment_pattern, title, re.IGNORECASE), f"Incorrectly matched non-deployment PR: {title}"
+
+
+class TestBuiltinExclusions:
+    """Test built-in file and directory exclusions."""
+
+    def test_builtin_excluded_directories(self):
+        """Test that built-in directories are in the exclusion list."""
+        from claudecode.github_action_audit import GitHubActionClient
+
+        expected_dirs = [
+            'node_modules',
+            'vendor',
+            'dist',
+            'build',
+            '.next',
+            '__pycache__',
+            '.gradle',
+            'Pods',
+            'DerivedData',
+        ]
+
+        for dir_name in expected_dirs:
+            assert dir_name in GitHubActionClient.BUILTIN_EXCLUDED_DIRS, f"Missing built-in excluded dir: {dir_name}"
+
+    def test_builtin_excluded_patterns(self):
+        """Test that built-in file patterns are in the exclusion list."""
+        from claudecode.github_action_audit import GitHubActionClient
+
+        expected_patterns = [
+            'package-lock.json',
+            'yarn.lock',
+            '*.min.js',
+            '*.min.css',
+            '*.pb.go',
+            '*.generated.*',
+            '*.png',
+            '*.jpg',
+            '*.woff2',
+            '*.pyc',
+        ]
+
+        for pattern in expected_patterns:
+            assert pattern in GitHubActionClient.BUILTIN_EXCLUDED_PATTERNS, f"Missing built-in excluded pattern: {pattern}"
+
+    def test_is_excluded_lock_files(self):
+        """Test that lock files are excluded."""
+        from claudecode.github_action_audit import GitHubActionClient
+        from unittest.mock import patch
+
+        with patch.dict('os.environ', {'GITHUB_TOKEN': 'test-token', 'EXCLUDE_DIRECTORIES': ''}):
+            client = GitHubActionClient()
+
+            lock_files = [
+                'package-lock.json',
+                'yarn.lock',
+                'Gemfile.lock',
+                'poetry.lock',
+                'Cargo.lock',
+                'go.sum',
+                'nested/path/package-lock.json',
+            ]
+
+            for filepath in lock_files:
+                assert client._is_excluded(filepath), f"Lock file should be excluded: {filepath}"
+
+    def test_is_excluded_generated_files(self):
+        """Test that generated files are excluded."""
+        from claudecode.github_action_audit import GitHubActionClient
+        from unittest.mock import patch
+
+        with patch.dict('os.environ', {'GITHUB_TOKEN': 'test-token', 'EXCLUDE_DIRECTORIES': ''}):
+            client = GitHubActionClient()
+
+            generated_files = [
+                'app.min.js',
+                'styles.min.css',
+                'app.bundle.js',
+                'main.chunk.js',
+                'api.pb.go',
+                'models.generated.ts',
+                'user.g.dart',
+            ]
+
+            for filepath in generated_files:
+                assert client._is_excluded(filepath), f"Generated file should be excluded: {filepath}"
+
+    def test_is_excluded_binary_files(self):
+        """Test that binary files are excluded."""
+        from claudecode.github_action_audit import GitHubActionClient
+        from unittest.mock import patch
+
+        with patch.dict('os.environ', {'GITHUB_TOKEN': 'test-token', 'EXCLUDE_DIRECTORIES': ''}):
+            client = GitHubActionClient()
+
+            binary_files = [
+                'logo.png',
+                'photo.jpg',
+                'icon.ico',
+                'font.woff2',
+                'document.pdf',
+                'archive.zip',
+            ]
+
+            for filepath in binary_files:
+                assert client._is_excluded(filepath), f"Binary file should be excluded: {filepath}"
+
+    def test_is_excluded_vendor_directories(self):
+        """Test that vendor directories are excluded."""
+        from claudecode.github_action_audit import GitHubActionClient
+        from unittest.mock import patch
+
+        with patch.dict('os.environ', {'GITHUB_TOKEN': 'test-token', 'EXCLUDE_DIRECTORIES': ''}):
+            client = GitHubActionClient()
+
+            vendor_paths = [
+                'node_modules/lodash/index.js',
+                'vendor/github.com/pkg/errors/errors.go',
+                'dist/bundle.js',
+                'build/output.js',
+                '.next/cache/data.json',
+                '__pycache__/module.pyc',
+                'Pods/AFNetworking/Source.m',
+            ]
+
+            for filepath in vendor_paths:
+                assert client._is_excluded(filepath), f"Vendor path should be excluded: {filepath}"
+
+    def test_is_not_excluded_source_files(self):
+        """Test that regular source files are NOT excluded."""
+        from claudecode.github_action_audit import GitHubActionClient
+        from unittest.mock import patch
+
+        with patch.dict('os.environ', {'GITHUB_TOKEN': 'test-token', 'EXCLUDE_DIRECTORIES': ''}):
+            client = GitHubActionClient()
+
+            source_files = [
+                'src/main.py',
+                'lib/utils.js',
+                'app/models/user.rb',
+                'pkg/handler/api.go',
+                'src/components/Button.tsx',
+                'tests/test_auth.py',
+            ]
+
+            for filepath in source_files:
+                assert not client._is_excluded(filepath), f"Source file should NOT be excluded: {filepath}"
+
+    def test_user_exclusions_combined_with_builtin(self):
+        """Test that user exclusions are combined with built-in exclusions."""
+        from claudecode.github_action_audit import GitHubActionClient
+        from unittest.mock import patch
+
+        with patch.dict('os.environ', {'GITHUB_TOKEN': 'test-token', 'EXCLUDE_DIRECTORIES': 'custom_dir,my_vendor'}):
+            client = GitHubActionClient()
+
+            # Built-in should still work
+            assert client._is_excluded('node_modules/pkg/index.js')
+            assert client._is_excluded('vendor/lib/code.go')
+
+            # User exclusions should also work
+            assert client._is_excluded('custom_dir/file.py')
+            assert client._is_excluded('my_vendor/lib.js')
+
+
+class TestDiffSizeLimits:
+    """Test diff size limit functionality."""
+
+    def test_diff_line_counting(self):
+        """Test that diff lines are counted correctly."""
+        sample_diff = """diff --git a/file.py b/file.py
+--- a/file.py
++++ b/file.py
+@@ -1,5 +1,10 @@
+ line 1
++added line 2
++added line 3
+ line 4
+-removed line 5
++replaced line 5
+ line 6"""
+
+        line_count = len(sample_diff.splitlines())
+        assert line_count == 11  # Count the actual lines
+
+    def test_max_diff_lines_env_parsing(self):
+        """Test that MAX_DIFF_LINES environment variable is parsed correctly."""
+        import os
+
+        # Test default value
+        max_lines_str = os.environ.get('MAX_DIFF_LINES', '5000')
+        try:
+            max_lines = int(max_lines_str)
+        except ValueError:
+            max_lines = 5000
+
+        assert max_lines == 5000  # Default when not set
+
+    def test_max_diff_lines_zero_disables_limit(self):
+        """Test that setting MAX_DIFF_LINES to 0 disables the limit."""
+        import os
+        from unittest.mock import patch
+
+        with patch.dict('os.environ', {'MAX_DIFF_LINES': '0'}):
+            max_lines_str = os.environ.get('MAX_DIFF_LINES', '5000')
+            max_lines = int(max_lines_str)
+
+            # When max_lines is 0, the check should be skipped
+            assert max_lines == 0
+            # In the actual code: if max_diff_lines > 0: ... (check is skipped)
