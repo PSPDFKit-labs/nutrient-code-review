@@ -37,10 +37,17 @@ PR DIFF CONTENT:
 
 Review the complete diff above. This contains all code changes in the PR.
 """
-    elif pr_diff and not include_diff:
+    else:
         diff_section = """
 
-NOTE: PR diff was omitted due to size constraints. Please use the file exploration tools to examine the specific files that were changed in this PR.
+IMPORTANT - FILE READING INSTRUCTIONS:
+You have access to the repository files. For each file listed above, use the Read tool to examine the changes.
+Focus on the files that are most likely to contain issues based on the PR context.
+
+To review effectively:
+1. Read each modified file to understand the current code
+2. Look at surrounding code context when needed to understand the changes
+3. Check related files if you need to understand dependencies or usage patterns
 """
 
     custom_review_section = ""
@@ -256,10 +263,17 @@ PR DIFF CONTENT:
 
 Review the complete diff above. This contains all code changes in the PR.
 """
-    elif pr_diff and not include_diff:
+    else:
         diff_section = """
 
-NOTE: PR diff was omitted due to size constraints. Please use the file exploration tools to examine the specific files that were changed in this PR.
+IMPORTANT - FILE READING INSTRUCTIONS:
+You have access to the repository files. For each file listed above, use the Read tool to examine the changes.
+Focus on the files that are most likely to contain issues based on the PR context.
+
+To review effectively:
+1. Read each modified file to understand the current code
+2. Look at surrounding code context when needed to understand the changes
+3. Check related files if you need to understand dependencies or usage patterns
 """
 
     # Add custom instructions if provided
@@ -414,10 +428,17 @@ PR DIFF CONTENT:
 
 Review the complete diff above. This contains all code changes in the PR.
 """
-    elif pr_diff and not include_diff:
+    else:
         diff_section = """
 
-NOTE: PR diff was omitted due to size constraints. Please use the file exploration tools to examine the specific files that were changed in this PR.
+IMPORTANT - FILE READING INSTRUCTIONS:
+You have access to the repository files. For each file listed above, use the Read tool to examine the changes.
+Focus on the files that are most likely to contain issues based on the PR context.
+
+To review effectively:
+1. Read each modified file to understand the current code
+2. Look at surrounding code context when needed to understand the changes
+3. Check related files if you need to understand dependencies or usage patterns
 """
 
     custom_security_section = ""

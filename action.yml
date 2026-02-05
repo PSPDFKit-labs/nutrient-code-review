@@ -69,7 +69,7 @@ inputs:
     default: ''
 
   max-diff-lines:
-    description: 'Maximum number of diff lines to review. PRs exceeding this limit will be skipped with a warning. Set to 0 to disable limit. Default 5000 keeps context under 50% of token limit.'
+    description: 'Maximum diff lines to embed in prompt. Larger diffs use agentic file reading instead. Set to 0 to always use agentic mode. Default: 5000'
     required: false
     default: '5000'
 
