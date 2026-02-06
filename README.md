@@ -42,6 +42,7 @@ jobs:
         with:
           comment-pr: true
           claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          require-label: 'READY TO REVIEW' # If this isn't set, the action will trigger any time *any* label is applied
 ```
 
 ## Security Considerations
