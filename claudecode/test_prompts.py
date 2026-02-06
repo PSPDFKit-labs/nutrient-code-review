@@ -1,288 +1,92 @@
 """Unit tests for the prompts module."""
 
-from claudecode.prompts import get_code_review_prompt, get_security_review_prompt
+from claudecode.prompts import get_unified_review_prompt
+
+
+def _sample_pr_data():
+    return {
+        "number": 123,
+        "title": "Add new feature",
+        "body": "This PR adds a new feature to handle user input",
+        "user": "testuser",
+        "changed_files": 1,
+        "additions": 10,
+        "deletions": 5,
+        "head": {
+            "repo": {
+                "full_name": "owner/repo"
+            }
+        },
+        "files": [
+            {
+                "filename": "app.py",
+                "status": "modified",
+                "additions": 10,
+                "deletions": 5,
+            }
+        ],
+    }
 
 
 class TestPrompts:
-    """Test prompt generation functions."""
-    
-    def test_get_code_review_prompt_basic(self):
-        """Test basic code review prompt generation."""
-        pr_data = {
-            "number": 123,
-            "title": "Add new feature",
-            "body": "This PR adds a new feature to handle user input",
-            "user": "testuser",
-            "changed_files": 1,
-            "additions": 10,
-            "deletions": 5,
-            "head": {
-                "repo": {
-                    "full_name": "owner/repo"
-                }
-            },
-            "files": [
-                {
-                    "filename": "app.py",
-                    "status": "modified",
-                    "additions": 10,
-                    "deletions": 5
-                }
-            ]
-        }
-        
+    """Test unified prompt generation."""
+
+    def test_get_unified_review_prompt_basic(self):
+        pr_data = _sample_pr_data()
+
         pr_diff = """
 diff --git a/app.py b/app.py
 @@ -1,5 +1,10 @@
  def process_input(user_input):
 -    return user_input
 +    # Process the input
-+    result = eval(user_input)  # Potential security issue
++    result = eval(user_input)
 +    return result
 """
-        
-        prompt = get_code_review_prompt(pr_data, pr_diff)
-        
-        # Check that prompt contains expected elements
+
+        prompt = get_unified_review_prompt(pr_data, pr_diff)
+
         assert isinstance(prompt, str)
         assert len(prompt) > 0
-        assert "123" in prompt  # PR number
-        assert "Add new feature" in prompt  # PR title
-        assert "testuser" in prompt  # Author
-        assert "app.py" in prompt  # File name
-        assert "eval(user_input)" in prompt  # The actual diff content
+        assert "123" in prompt
+        assert "Add new feature" in prompt
+        assert "testuser" in prompt
+        assert "app.py" in prompt
+        assert "eval(user_input)" in prompt
+        assert "code quality" in prompt.lower()
+        assert "security" in prompt.lower()
 
-    def test_get_security_review_prompt_basic(self):
-        """Test basic security review prompt generation."""
-        pr_data = {
-            "number": 222,
-            "title": "Harden auth flow",
-            "body": "Tighten auth checks and validation",
-            "user": "security-team",
-            "changed_files": 1,
-            "additions": 12,
-            "deletions": 4,
-            "head": {
-                "repo": {
-                    "full_name": "owner/repo"
-                }
-            },
-            "files": [
-                {
-                    "filename": "auth.py",
-                    "status": "modified",
-                    "additions": 12,
-                    "deletions": 4
-                }
-            ]
-        }
+    def test_get_unified_review_prompt_without_diff_uses_file_reading_instructions(self):
+        pr_data = _sample_pr_data()
 
-        pr_diff = """
-diff --git a/auth.py b/auth.py
-@@ -1,3 +1,7 @@
- def login(user, password):
-     return authenticate(user, password)
-"""
+        prompt = get_unified_review_prompt(pr_data, pr_diff="diff --git a/a b/a", include_diff=False)
 
-        prompt = get_security_review_prompt(pr_data, pr_diff)
+        assert "PR DIFF CONTENT:" not in prompt
+        assert "IMPORTANT - FILE READING INSTRUCTIONS:" in prompt
+
+    def test_get_unified_review_prompt_no_files(self):
+        pr_data = _sample_pr_data()
+        pr_data["changed_files"] = 0
+        pr_data["files"] = []
+
+        prompt = get_unified_review_prompt(pr_data, pr_diff="")
 
         assert isinstance(prompt, str)
-        assert "security review" in prompt.lower()
-        assert "auth.py" in prompt
-    
-    def test_get_code_review_prompt_empty_body(self):
-        """Test prompt generation with empty PR body."""
-        pr_data = {
-            "number": 456,
-            "title": "Quick fix",
-            "body": None,  # Empty body
-            "user": "author",
-            "changed_files": 0,
-            "additions": 0,
-            "deletions": 0,
-            "head": {
-                "repo": {
-                    "full_name": "owner/repo"
-                }
-            },
-            "files": []
-        }
-        
-        pr_diff = "diff --git a/test.js b/test.js"
-        
-        prompt = get_code_review_prompt(pr_data, pr_diff)
-        
-        assert isinstance(prompt, str)
-        assert "456" in prompt
-        assert "Quick fix" in prompt
-        assert "author" in prompt
-    
-    def test_get_code_review_prompt_multiple_files(self):
-        """Test prompt generation with multiple files."""
-        pr_data = {
-            "number": 789,
-            "title": "Security improvements",
-            "body": "Fixing various security issues",
-            "user": "security-team",
-            "changed_files": 3,
-            "additions": 70,
-            "deletions": 110,
-            "head": {
-                "repo": {
-                    "full_name": "owner/repo"
-                }
-            },
-            "files": [
-                {
-                    "filename": "auth.py",
-                    "status": "modified",
-                    "additions": 20,
-                    "deletions": 10
-                },
-                {
-                    "filename": "config.yaml",
-                    "status": "added",
-                    "additions": 50,
-                    "deletions": 0
-                },
-                {
-                    "filename": "old_auth.py",
-                    "status": "deleted",
-                    "additions": 0,
-                    "deletions": 100
-                }
-            ]
-        }
-        
-        pr_diff = """
-diff --git a/auth.py b/auth.py
-@@ -1,10 +1,20 @@
-+import secrets
-+
-diff --git a/config.yaml b/config.yaml
-@@ -0,0 +1,50 @@
-+database:
-+  password: "hardcoded_password"
-"""
-        
-        prompt = get_code_review_prompt(pr_data, pr_diff)
-        
-        # Check all files are mentioned
-        assert "auth.py" in prompt
-        assert "config.yaml" in prompt
-        assert "old_auth.py" in prompt
-        
-        # Check file statuses
-        assert "modified" in prompt.lower()
-        assert "added" in prompt.lower()
-        assert "deleted" in prompt.lower()
-    
-    def test_get_code_review_prompt_special_characters(self):
-        """Test prompt generation with special characters."""
-        pr_data = {
-            "number": 999,
-            "title": "Fix SQL injection in user's profile",
-            "body": "This fixes a SQL injection vulnerability in the `get_user()` function",
-            "user": "user-with-dash",
-            "changed_files": 1,
-            "additions": 5,
-            "deletions": 3,
-            "head": {
-                "repo": {
-                    "full_name": "owner/repo"
-                }
-            },
-            "files": [
-                {
-                    "filename": "src/db/queries.py",
-                    "status": "modified",
-                    "additions": 5,
-                    "deletions": 3
-                }
-            ]
-        }
-        
-        pr_diff = """
-diff --git a/src/db/queries.py b/src/db/queries.py
-@@ -10,3 +10,5 @@
--    query = f"SELECT * FROM users WHERE id = {user_id}"
-+    query = "SELECT * FROM users WHERE id = ?"
-+    cursor.execute(query, (user_id,))
-"""
-        
-        prompt = get_code_review_prompt(pr_data, pr_diff)
-        
-        # Check special characters are preserved
-        assert "user's" in prompt
-        assert "user-with-dash" in prompt
-        assert "src/db/queries.py" in prompt
-    
-    def test_get_code_review_prompt_no_files(self):
-        """Test prompt generation with no files (edge case)."""
-        pr_data = {
-            "number": 111,
-            "title": "Documentation update",
-            "body": "Just updating docs",
-            "user": "doc-author",
-            "changed_files": 0,
-            "additions": 0,
-            "deletions": 0,
-            "head": {
-                "repo": {
-                    "full_name": "owner/repo"
-                }
-            },
-            "files": []  # No files
-        }
-        
-        pr_diff = ""  # Empty diff
-        
-        prompt = get_code_review_prompt(pr_data, pr_diff)
-        
-        assert isinstance(prompt, str)
-        assert "111" in prompt
-        assert "Documentation update" in prompt
-    
-    def test_get_code_review_prompt_structure(self):
-        """Test that prompt has expected structure."""
-        pr_data = {
-            "number": 42,
-            "title": "Test PR",
-            "body": "Test description",
-            "user": "testuser",
-            "changed_files": 1,
-            "additions": 1,
-            "deletions": 1,
-            "head": {
-                "repo": {
-                    "full_name": "owner/repo"
-                }
-            },
-            "files": [
-                {
-                    "filename": "test.py",
-                    "status": "modified",
-                    "additions": 1,
-                    "deletions": 1
-                }
-            ]
-        }
-        
+        assert "Files changed: 0" in prompt
+
+    def test_get_unified_review_prompt_structure(self):
+        pr_data = _sample_pr_data()
+        pr_data["title"] = "Test PR"
+
         pr_diff = "diff --git a/test.py b/test.py\n+print('test')"
-        
-        prompt = get_code_review_prompt(pr_data, pr_diff)
-        
-        # Should contain sections for metadata and diff
-        assert "PR #" in prompt or "Pull Request" in prompt
-        assert "Title:" in prompt or pr_data["title"] in prompt
-        assert "Author:" in prompt or pr_data["user"]["login"] in prompt
-        assert "Files:" in prompt or "test.py" in prompt
-        
-        # Should contain the actual diff
-        assert pr_diff in prompt or "print('test')" in prompt
-    
-    def test_get_code_review_prompt_long_diff(self):
-        """Test prompt generation with very long diff."""
+        prompt = get_unified_review_prompt(pr_data, pr_diff)
+
+        assert "CONTEXT:" in prompt
+        assert "OBJECTIVE:" in prompt
+        assert "REQUIRED OUTPUT FORMAT:" in prompt
+        assert pr_diff in prompt
+
+    def test_get_unified_review_prompt_long_diff(self):
         pr_data = {
             "number": 12345,
             "title": "Major refactoring",
@@ -301,34 +105,31 @@ diff --git a/src/db/queries.py b/src/db/queries.py
                     "filename": f"file{i}.py",
                     "status": "modified",
                     "additions": 100,
-                    "deletions": 50
+                    "deletions": 50,
                 }
                 for i in range(10)
-            ]
+            ],
         }
-        
-        # Create a large diff
+
         pr_diff = "\n".join([
             f"diff --git a/file{i}.py b/file{i}.py\n" +
             "\n".join([f"+line {j}" for j in range(50)])
             for i in range(10)
         ])
-        
-        prompt = get_code_review_prompt(pr_data, pr_diff)
-        
-        # Should handle large diffs without error
+
+        prompt = get_unified_review_prompt(pr_data, pr_diff)
+
         assert isinstance(prompt, str)
-        assert len(prompt) > 1000  # Should be substantial
+        assert len(prompt) > 1000
         assert "12345" in prompt
         assert "Major refactoring" in prompt
-    
-    def test_get_code_review_prompt_unicode(self):
-        """Test prompt generation with unicode characters."""
+
+    def test_get_unified_review_prompt_unicode(self):
         pr_data = {
             "number": 666,
-            "title": "Add emoji support 🎉",
-            "body": "This PR adds emoji rendering 🔒 🛡️",
-            "user": "émoji-user",
+            "title": "Add emoji support",
+            "body": "This PR adds emoji rendering",
+            "user": "emoji-user",
             "changed_files": 1,
             "additions": 42,
             "deletions": 0,
@@ -339,25 +140,36 @@ diff --git a/src/db/queries.py b/src/db/queries.py
             },
             "files": [
                 {
-                    "filename": "émojis.py",
+                    "filename": "emoji.py",
                     "status": "added",
                     "additions": 42,
-                    "deletions": 0
+                    "deletions": 0,
                 }
-            ]
+            ],
         }
-        
+
         pr_diff = """
-diff --git a/émojis.py b/émojis.py
-+# 🔒 Security check
+diff --git a/emoji.py b/emoji.py
++# Security check
 +def check_input(text: str) -> bool:
-+    return "🚨" not in text
++    return "ALERT" not in text
 """
-        
-        prompt = get_code_review_prompt(pr_data, pr_diff)
-        
-        # Check unicode is preserved
-        assert "🎉" in prompt  # Title emoji
-        assert "émoji-user" in prompt
-        assert "émojis.py" in prompt
-        assert "🚨" in prompt  # From diff
+
+        prompt = get_unified_review_prompt(pr_data, pr_diff)
+
+        assert "emoji-user" in prompt
+        assert "emoji.py" in prompt
+        assert "ALERT" in prompt
+
+    def test_get_unified_review_prompt_custom_instructions(self):
+        pr_data = _sample_pr_data()
+
+        prompt = get_unified_review_prompt(
+            pr_data,
+            pr_diff="diff --git a/app.py b/app.py",
+            custom_review_instructions="Check transaction consistency.",
+            custom_security_instructions="Check GraphQL authz.",
+        )
+
+        assert "Check transaction consistency." in prompt
+        assert "Check GraphQL authz." in prompt

@@ -52,7 +52,7 @@ See [examples/custom-security-scan-instructions.txt](../examples/custom-security
 
 ## How It Works
 
-Your custom instructions are appended to the security sections of both the general review and the dedicated security review prompts. This means:
+Your custom instructions are appended to the security section of the unified review prompt. This means:
 1. All default security categories are still checked
 2. Your custom categories extend (not replace) the default security scan
 3. The same HIGH/MEDIUM/LOW severity guidelines apply

@@ -389,15 +389,6 @@ class SimpleClaudeRunner:
             }
         }
 
-    # Backward-compatible alias
-    def run_security_audit(self, repo_dir: Path, prompt: str) -> Tuple[bool, str, Dict[str, Any]]:
-        return self.run_code_review(repo_dir, prompt)
-
-    # Backward-compatible alias
-    def _extract_security_findings(self, claude_output: Any) -> Dict[str, Any]:
-        return self._extract_review_findings(claude_output)
-    
-    
     def validate_claude_available(self) -> Tuple[bool, str]:
         """Validate that Claude Code is available."""
         try:
@@ -538,11 +529,6 @@ def run_code_review(claude_runner: SimpleClaudeRunner, prompt: str) -> Dict[str,
         raise AuditError(f'Code review failed: {error_msg}')
         
     return results
-
-
-def run_security_audit(claude_runner: SimpleClaudeRunner, prompt: str) -> Dict[str, Any]:
-    """Backward-compatible wrapper for previous security audit runner."""
-    return run_code_review(claude_runner, prompt)
 
 
 def apply_findings_filter(findings_filter, original_findings: List[Dict[str, Any]], 

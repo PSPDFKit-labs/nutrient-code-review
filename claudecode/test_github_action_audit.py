@@ -17,12 +17,11 @@ class TestImports:
     
     def test_component_imports(self):
         """Test that all component modules can be imported."""
-        from claudecode.prompts import get_code_review_prompt, get_security_review_prompt
+        from claudecode.prompts import get_unified_review_prompt
         from claudecode.json_parser import parse_json_with_fallbacks, extract_json_from_text
         
         # Verify they're callable/usable
-        assert callable(get_code_review_prompt)
-        assert callable(get_security_review_prompt)
+        assert callable(get_unified_review_prompt)
         assert callable(parse_json_with_fallbacks)
         assert callable(extract_json_from_text)
 
@@ -173,9 +172,9 @@ class TestJSONParser:
 class TestPromptsModule:
     """Test the prompts module."""
     
-    def test_get_code_review_prompt(self):
-        """Test security audit prompt generation."""
-        from claudecode.prompts import get_code_review_prompt
+    def test_get_unified_review_prompt(self):
+        """Test unified review prompt generation."""
+        from claudecode.prompts import get_unified_review_prompt
         
         pr_data = {
             'number': 123,
@@ -203,7 +202,7 @@ class TestPromptsModule:
         
         pr_diff = "diff --git a/test.py b/test.py\n+added line"
         
-        prompt = get_code_review_prompt(pr_data, pr_diff)
+        prompt = get_unified_review_prompt(pr_data, pr_diff)
         
         assert isinstance(prompt, str)
         assert 'security' in prompt.lower()

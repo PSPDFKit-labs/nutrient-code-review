@@ -104,10 +104,10 @@ class TestSimpleClaudeRunner:
         assert success is False
         assert 'timed out' in error
     
-    def test_run_security_audit_missing_directory(self):
+    def test_run_code_review_missing_directory(self):
         """Test audit with missing directory."""
         runner = SimpleClaudeRunner()
-        success, error, results = runner.run_security_audit(
+        success, error, results = runner.run_code_review(
             Path('/non/existent/path'),
             "test prompt"
         )
@@ -117,8 +117,8 @@ class TestSimpleClaudeRunner:
         assert results == {}
     
     @patch('subprocess.run')
-    def test_run_security_audit_success(self, mock_run):
-        """Test successful security audit."""
+    def test_run_code_review_success(self, mock_run):
+        """Test successful code review."""
         # Claude Code returns wrapped format with 'result' field
         findings_data = {
             "findings": [
@@ -150,7 +150,7 @@ class TestSimpleClaudeRunner:
         
         runner = SimpleClaudeRunner()
         with patch('pathlib.Path.exists', return_value=True):
-            success, error, results = runner.run_security_audit(
+            success, error, results = runner.run_code_review(
                 Path('/tmp/test'),
                 "test prompt"
             )
@@ -173,7 +173,7 @@ class TestSimpleClaudeRunner:
         assert call_args[1]['cwd'] == Path('/tmp/test')
     
     @patch('subprocess.run')
-    def test_run_security_audit_large_prompt_warning(self, mock_run, capsys):
+    def test_run_code_review_large_prompt_warning(self, mock_run, capsys):
         """Test warning for large prompts."""
         mock_run.return_value = Mock(
             returncode=0,
@@ -186,7 +186,7 @@ class TestSimpleClaudeRunner:
         
         runner = SimpleClaudeRunner()
         with patch('pathlib.Path.exists', return_value=True):
-            success, error, results = runner.run_security_audit(
+            success, error, results = runner.run_code_review(
                 Path('/tmp/test'),
                 large_prompt
             )
@@ -196,7 +196,7 @@ class TestSimpleClaudeRunner:
         assert success is True
     
     @patch('subprocess.run')
-    def test_run_security_audit_retry_on_failure(self, mock_run):
+    def test_run_code_review_retry_on_failure(self, mock_run):
         """Test retry logic on failure."""
         # First call fails, second succeeds
         mock_run.side_effect = [
@@ -206,7 +206,7 @@ class TestSimpleClaudeRunner:
         
         runner = SimpleClaudeRunner()
         with patch('pathlib.Path.exists', return_value=True):
-            success, error, results = runner.run_security_audit(
+            success, error, results = runner.run_code_review(
                 Path('/tmp/test'),
                 "test prompt"
             )
@@ -216,7 +216,7 @@ class TestSimpleClaudeRunner:
         assert mock_run.call_count == 2  # Retried once
     
     @patch('subprocess.run')
-    def test_run_security_audit_retry_on_error_during_execution(self, mock_run):
+    def test_run_code_review_retry_on_error_during_execution(self, mock_run):
         """Test retry on error_during_execution result."""
         error_result = {
             "type": "result",
@@ -244,7 +244,7 @@ class TestSimpleClaudeRunner:
         
         runner = SimpleClaudeRunner()
         with patch('pathlib.Path.exists', return_value=True):
-            success, error, results = runner.run_security_audit(
+            success, error, results = runner.run_code_review(
                 Path('/tmp/test'),
                 "test prompt"
             )
@@ -254,13 +254,13 @@ class TestSimpleClaudeRunner:
         assert mock_run.call_count == 2
     
     @patch('subprocess.run')
-    def test_run_security_audit_timeout(self, mock_run):
+    def test_run_code_review_timeout(self, mock_run):
         """Test timeout handling."""
         mock_run.side_effect = subprocess.TimeoutExpired(['claude'], 1200)
         
         runner = SimpleClaudeRunner()
         with patch('pathlib.Path.exists', return_value=True):
-            success, error, results = runner.run_security_audit(
+            success, error, results = runner.run_code_review(
                 Path('/tmp/test'),
                 "test prompt"
             )
@@ -270,7 +270,7 @@ class TestSimpleClaudeRunner:
         assert results == {}
     
     @patch('subprocess.run')
-    def test_run_security_audit_json_parse_failure_with_retry(self, mock_run):
+    def test_run_code_review_json_parse_failure_with_retry(self, mock_run):
         """Test JSON parse failure with retry."""
         mock_run.side_effect = [
             Mock(returncode=0, stdout='Invalid JSON', stderr=''),
@@ -279,7 +279,7 @@ class TestSimpleClaudeRunner:
         
         runner = SimpleClaudeRunner()
         with patch('pathlib.Path.exists', return_value=True):
-            success, error, results = runner.run_security_audit(
+            success, error, results = runner.run_code_review(
                 Path('/tmp/test'),
                 "test prompt"
             )
@@ -288,7 +288,7 @@ class TestSimpleClaudeRunner:
         assert 'Failed to parse Claude output' in error
         assert mock_run.call_count == 2
     
-    def test_extract_security_findings_claude_wrapper(self):
+    def test_extract_review_findings_claude_wrapper(self):
         """Test extraction from Claude Code wrapper format."""
         runner = SimpleClaudeRunner()
         
@@ -301,11 +301,11 @@ class TestSimpleClaudeRunner:
             })
         }
         
-        result = runner._extract_security_findings(claude_output)
+        result = runner._extract_review_findings(claude_output)
         assert len(result['findings']) == 1
         assert result['findings'][0]['file'] == 'test.py'
     
-    def test_extract_security_findings_direct_format(self):
+    def test_extract_review_findings_direct_format(self):
         """Test that direct findings format was removed - only wrapped format is supported."""
         runner = SimpleClaudeRunner()
         
@@ -322,12 +322,12 @@ class TestSimpleClaudeRunner:
             }
         }
         
-        result = runner._extract_security_findings(claude_output)
+        result = runner._extract_review_findings(claude_output)
         # Should return empty structure since direct format is not supported
         assert len(result['findings']) == 0
         assert result['analysis_summary']['review_completed'] is False
     
-    def test_extract_security_findings_text_fallback(self):
+    def test_extract_review_findings_text_fallback(self):
         """Test that text fallback was removed - only JSON is supported."""
         runner = SimpleClaudeRunner()
         
@@ -337,17 +337,17 @@ class TestSimpleClaudeRunner:
         }
         
         # Should return empty findings since we don't parse text anymore
-        result = runner._extract_security_findings(claude_output)
+        result = runner._extract_review_findings(claude_output)
         assert len(result['findings']) == 0
         assert result['analysis_summary']['review_completed'] is False
     
-    def test_extract_security_findings_empty(self):
+    def test_extract_review_findings_empty(self):
         """Test extraction with no findings."""
         runner = SimpleClaudeRunner()
         
         # Various empty formats
         for output in [None, {}, {"result": ""}, {"other": "data"}]:
-            result = runner._extract_security_findings(output)
+            result = runner._extract_review_findings(output)
             assert result['findings'] == []
             assert result['analysis_summary']['review_completed'] is False
     
@@ -391,7 +391,7 @@ class TestClaudeRunnerEdgeCases:
                 stderr=''
             )
             
-            success, error, results = runner.run_security_audit(
+            success, error, results = runner.run_code_review(
                 Path('/tmp/test'),
                 "test"
             )
@@ -414,7 +414,7 @@ class TestClaudeRunnerEdgeCases:
         
         runner = SimpleClaudeRunner()
         with patch('pathlib.Path.exists', return_value=True):
-            success, error, results = runner.run_security_audit(
+            success, error, results = runner.run_code_review(
                 Path('/tmp/test'),
                 "test"
             )
@@ -429,7 +429,7 @@ class TestClaudeRunnerEdgeCases:
         
         runner = SimpleClaudeRunner()
         with patch('pathlib.Path.exists', return_value=True):
-            success, error, results = runner.run_security_audit(
+            success, error, results = runner.run_code_review(
                 Path('/tmp/test'),
                 "test"
             )
