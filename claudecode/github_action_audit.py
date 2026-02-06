@@ -680,34 +680,20 @@ def main():
             print(json.dumps({'error': f'Failed to fetch PR data: {str(e)}'}))
             sys.exit(EXIT_GENERAL_ERROR)
 
-        # Check diff size limit
+        # Determine whether to embed diff or use agentic file reading
         max_diff_lines_str = os.environ.get('MAX_DIFF_LINES', '5000')
         try:
             max_diff_lines = int(max_diff_lines_str)
         except ValueError:
             max_diff_lines = 5000
 
-        if max_diff_lines > 0:
-            diff_line_count = len(pr_diff.splitlines())
-            if diff_line_count > max_diff_lines:
-                print(f"[Warning] PR diff has {diff_line_count} lines, exceeding limit of {max_diff_lines}. Skipping review.", file=sys.stderr)
-                output = {
-                    'pr_number': pr_number,
-                    'repo': repo_name,
-                    'findings': [],
-                    'analysis_summary': {
-                        'files_reviewed': 0,
-                        'high_severity': 0,
-                        'medium_severity': 0,
-                        'low_severity': 0,
-                        'review_completed': False,
-                        'skipped_reason': f'Diff too large: {diff_line_count} lines exceeds limit of {max_diff_lines}'
-                    }
-                }
-                print(json.dumps(output, indent=2))
-                sys.exit(EXIT_SUCCESS)
-            else:
-                print(f"[Debug] PR diff has {diff_line_count} lines (limit: {max_diff_lines})", file=sys.stderr)
+        diff_line_count = len(pr_diff.splitlines())
+        use_agentic_mode = max_diff_lines == 0 or diff_line_count > max_diff_lines
+
+        if use_agentic_mode:
+            print(f"[Info] Using agentic file reading mode (diff has {diff_line_count} lines, threshold: {max_diff_lines})", file=sys.stderr)
+        else:
+            print(f"[Debug] Embedding diff in prompt ({diff_line_count} lines)", file=sys.stderr)
 
         # Get repo directory from environment or use current directory
         repo_path = os.environ.get('REPO_PATH')
@@ -716,7 +702,7 @@ def main():
         def run_review(include_diff: bool):
             prompt_text = get_unified_review_prompt(
                 pr_data,
-                pr_diff,
+                pr_diff if include_diff else None,
                 include_diff=include_diff,
                 custom_review_instructions=custom_review_instructions,
                 custom_security_instructions=custom_security_instructions,
@@ -727,12 +713,12 @@ def main():
         analysis_summary_from_review = {}
 
         try:
-            (success, error_msg, review_results), prompt_len = run_review(include_diff=True)
+            (success, error_msg, review_results), prompt_len = run_review(include_diff=not use_agentic_mode)
 
+            # Fallback to agentic mode if prompt still too long
             if not success and error_msg == "PROMPT_TOO_LONG":
-                print(f"[Info] Review prompt too long, retrying without diff. Original prompt length: {prompt_len} characters", file=sys.stderr)
+                print(f"[Info] Prompt too long ({prompt_len} chars), falling back to agentic mode", file=sys.stderr)
                 (success, error_msg, review_results), prompt_len = run_review(include_diff=False)
-                print(f"[Info] Review prompt length without diff: {prompt_len} characters", file=sys.stderr)
 
             if not success:
                 raise AuditError(f'Code review failed: {error_msg}')

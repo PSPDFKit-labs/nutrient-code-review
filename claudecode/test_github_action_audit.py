@@ -457,8 +457,8 @@ class TestDiffSizeLimits:
 
         assert max_lines == 5000  # Default when not set
 
-    def test_max_diff_lines_zero_disables_limit(self):
-        """Test that setting MAX_DIFF_LINES to 0 disables the limit."""
+    def test_max_diff_lines_zero_forces_agentic_mode(self):
+        """Test that setting MAX_DIFF_LINES to 0 forces agentic file reading mode."""
         import os
         from unittest.mock import patch
 
@@ -466,6 +466,6 @@ class TestDiffSizeLimits:
             max_lines_str = os.environ.get('MAX_DIFF_LINES', '5000')
             max_lines = int(max_lines_str)
 
-            # When max_lines is 0, the check should be skipped
+            # When max_lines is 0, agentic mode is always used
             assert max_lines == 0
-            # In the actual code: if max_diff_lines > 0: ... (check is skipped)
+            # In the actual code: use_agentic_mode = max_diff_lines == 0 or ...
