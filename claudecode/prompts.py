@@ -2,6 +2,12 @@
 
 from typing import Any, Dict, List, Optional
 
+COMPLIANCE_EXTRA_FIELDS = ',\n      "rule_reference": "path/to/CLAUDE.md#section"'
+SECURITY_EXTRA_FIELDS = (
+    ',\n      "exploit_preconditions": "...",\n      "trust_boundary": "...",\n'
+    '      "cwe": "optional CWE-###"'
+)
+
 
 def _format_files_changed(pr_data: Dict[str, Any]) -> str:
     """Format changed files for prompt context."""
@@ -145,7 +151,7 @@ DISCOVERED CONTEXT:
 Focus exclusively on clear CLAUDE.md violations in changed code. Cite concrete violated rule text in each finding.
 Reject ambiguous or preference-only claims.
 
-{_findings_output_schema(',\n      "rule_reference": "path/to/CLAUDE.md#section"')}
+    {_findings_output_schema(COMPLIANCE_EXTRA_FIELDS)}
 
 Return JSON only.
 """
@@ -223,7 +229,7 @@ Do NOT report:
 - speculative attacks without evidence in changed code paths
 - issues outside modified scope unless required to prove exploitability
 {custom_block}
-{_findings_output_schema(',\n      "exploit_preconditions": "...",\n      "trust_boundary": "...",\n      "cwe": "optional CWE-###"')}
+    {_findings_output_schema(SECURITY_EXTRA_FIELDS)}
 
 Return JSON only.
 """
