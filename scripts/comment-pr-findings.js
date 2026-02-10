@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const { spawnSync } = require('child_process');
+const REVIEW_MARKER = '<!-- nutrient-code-review-action -->';
 
 // PR Summary marker for identifying our summary sections
 const PR_SUMMARY_MARKER = '📋 **PR Summary:**';
@@ -102,6 +103,7 @@ function addReactionsToReview(reviewId) {
 // Check if a review was posted by this action
 function isOwnReview(review) {
   if (!review.body) return false;
+  if (review.body.includes(REVIEW_MARKER)) return true;
 
   // Check for our review summary patterns
   const ownPatterns = [
@@ -135,8 +137,8 @@ function findExistingReview() {
 
     for (const review of reviews) {
       const isDismissible = review.state === 'APPROVED' || review.state === 'CHANGES_REQUESTED';
-      const isBot = review.user && review.user.type === 'Bot';
       const isOwn = isOwnReview(review);
+      const isBot = review.user && review.user.type === 'Bot';
 
       if (isBot && isDismissible && isOwn) {
         return review;
@@ -293,7 +295,7 @@ async function run() {
 
     const highSeverityCount = analysisSummary.high_severity || 0;
     const reviewEvent = highSeverityCount > 0 ? 'REQUEST_CHANGES' : 'APPROVE';
-    const reviewBody = buildReviewSummary(newFindings, prSummary, analysisSummary);
+    const reviewBody = `${buildReviewSummary(newFindings, prSummary, analysisSummary)}\n\n${REVIEW_MARKER}`;
 
     // Prepare review comments
     const reviewComments = [];
