@@ -1026,7 +1026,7 @@ describe('comment-pr-findings.js', () => {
           id: 201,
           state: 'APPROVED',
           user: { type: 'Bot' },
-          body: '📋 **PR Summary:**\nThis PR adds auth.\n\n---\n\nNo issues found. Changes look good.'
+          body: '<!-- nutrient-code-review-action -->\nNo issues found. Changes look good.'
         }
       ];
 

@@ -103,27 +103,7 @@ function addReactionsToReview(reviewId) {
 // Check if a review was posted by this action
 function isOwnReview(review) {
   if (!review.body) return false;
-  if (review.body.includes(REVIEW_MARKER)) return true;
-
-  // Check for our review summary patterns
-  const ownPatterns = [
-    PR_SUMMARY_MARKER,
-    'No issues found. Changes look good.',
-    /^Found \d+ .+ issues?\./,
-    'Please address the high-severity issues before merging.',
-    'Consider addressing the suggestions in the comments.',
-    'Minor suggestions noted in comments.'
-  ];
-
-  for (const pattern of ownPatterns) {
-    if (pattern instanceof RegExp) {
-      if (pattern.test(review.body)) return true;
-    } else {
-      if (review.body.includes(pattern)) return true;
-    }
-  }
-
-  return false;
+  return review.body.includes(REVIEW_MARKER);
 }
 
 // Find an existing review posted by this action
