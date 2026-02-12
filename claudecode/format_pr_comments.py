@@ -37,17 +37,9 @@ def is_bot_comment(comment: Dict[str, Any]) -> bool:
         True if this is a bot review comment.
     """
     body = comment.get('body', '')
-
-    # Primary check: look for our marker
-    if BOT_COMMENT_MARKER in body:
-        return True
-
-    # Secondary check: user type is Bot
     user = comment.get('user', {})
-    if user.get('type') == 'Bot':
-        return True
 
-    return False
+    return BOT_COMMENT_MARKER in body and user.get('type') == 'Bot'
 
 
 def format_pr_comments_for_prompt(

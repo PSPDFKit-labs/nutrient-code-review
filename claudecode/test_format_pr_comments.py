@@ -199,9 +199,9 @@ class TestFormatPrCommentsForPrompt:
 class TestIsBotComment:
     """Tests for is_bot_comment function."""
 
-    def test_with_marker(self):
-        """Test bot comment detection by marker."""
-        bot_comment = {'body': f'{BOT_COMMENT_MARKER} Test**', 'user': {'type': 'User'}}
+    def test_with_marker_and_bot(self):
+        """Test bot comment true case."""
+        bot_comment = {'body': f'{BOT_COMMENT_MARKER} Test**', 'user': {'type': 'Bot'}}
         assert is_bot_comment(bot_comment) is True
 
     def test_without_marker_user_type(self):
@@ -210,9 +210,14 @@ class TestIsBotComment:
         assert is_bot_comment(user_comment) is False
 
     def test_by_user_type(self):
-        """Test bot comment detection by user type."""
+        """Test bot comment detection but not our bot."""
         bot_comment = {'body': 'Some automated message', 'user': {'type': 'Bot'}}
-        assert is_bot_comment(bot_comment) is True
+        assert is_bot_comment(bot_comment) is False
+
+    def test_with_marker(self):
+        """Test comment with marker but not from a bot."""
+        bot_comment = {'body': f'{BOT_COMMENT_MARKER} Test**', 'user': {'type': 'User'}}
+        assert is_bot_comment(bot_comment) is False
 
 
 class TestTruncateReplies:
