@@ -29,7 +29,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, review_requested]
   issue_comment:
-    types: [created]
+    types: [created] # Enables bot mentions for re-reviews
 
 jobs:
   review:
