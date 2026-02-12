@@ -138,12 +138,12 @@ def main():
             print(f"  - [{finding.get('severity', 'UNKNOWN')}] {finding.get('file', 'unknown')}:{finding.get('line', '?')}")
             if 'category' in finding:
                 print(f"    Category: {finding['category']}")
+            if 'title' in finding:
+                print(f"    Title: {finding['title']}")
             if 'description' in finding:
                 print(f"    Description: {finding['description']}")
             if 'impact' in finding:
                 print(f"    Impact: {finding['impact']}")
-            elif 'exploit_scenario' in finding:
-                print(f"    Impact: {finding['exploit_scenario']}")
             if 'recommendation' in finding:
                 print(f"    Fix: {finding['recommendation']}")
             if 'confidence' in finding:

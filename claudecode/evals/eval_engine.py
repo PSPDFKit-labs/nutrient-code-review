@@ -16,8 +16,8 @@ from ..json_parser import parse_json_with_fallbacks
 # Timeout constants (in seconds)
 TIMEOUT_SHORT = 10
 TIMEOUT_GIT_OPERATION = 60
-TIMEOUT_FETCH = 600
-TIMEOUT_CLONE = 300
+TIMEOUT_FETCH = 1200
+TIMEOUT_CLONE = 1800
 TIMEOUT_WORKTREE = 300
 TIMEOUT_WORKTREE_CREATE = 1200
 TIMEOUT_CLAUDECODE = 1800
@@ -377,11 +377,12 @@ class EvaluationEngine:
             findings_summary = []
             for finding in findings[:10]:  # Limit to first 10 for summary
                 summary_item = {
-                    'file': finding.get('file', finding.get('path', 'unknown')),
-                    'line': finding.get('line', finding.get('start', {}).get('line', 0)),
+                    'file': finding.get('file', 'unknown'),
+                    'line': finding.get('line', 0),
                     'severity': finding.get('severity', 'UNKNOWN'),
-                    'title': finding.get('check_id', finding.get('category', 'Unknown')),
-                    'description': finding.get('description', finding.get('message', 'Unknown'))
+                    'category': finding.get('category', 'Unknown'),
+                    'title': finding.get('title', 'Unknown'),
+                    'description': finding.get('description', 'Unknown')
                 }
                 findings_summary.append(summary_item)
             
