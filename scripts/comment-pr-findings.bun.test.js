@@ -165,13 +165,15 @@ describe('comment-pr-findings.js', () => {
 
     test('should process findings correctly', async () => {
       const mockFindings = [{
-        path: 'test.py',
-        start: { line: 10 },
-        check_id: 'rules.insecure-pickle-loads-autofix',
-        extra: {
-          message: 'Detected use of pickle deserialization',
-          fix: 'json.loads($DATA)  # Use json.loads() instead of pickle for security'
-        }
+        file: 'test.py',
+        line: 10,
+        title: 'Insecure pickle deserialization',
+        description: 'Detected use of pickle deserialization',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Arbitrary code execution via pickle deserialization',
+        recommendation: 'Use json.loads() instead of pickle for security',
+        confidence: 0.95
       }];
 
       const mockPrFiles = [{
@@ -371,15 +373,17 @@ describe('comment-pr-findings.js', () => {
 
   describe('Autofix Suggestions', () => {
     test('should generate correct pickle.loads autofix', async () => {
-     
+
       const mockFindings = [{
-        path: 'test.py',
-        start: { line: 1 },
-        check_id: 'rules.insecure-pickle-loads-autofix',
-        extra: {
-          message: 'Insecure pickle loads',
-          fix: 'json.loads($DATA)  # Use json.loads() instead of pickle for security'
-        }
+        file: 'test.py',
+        line: 1,
+        title: 'Insecure pickle loads',
+        description: 'Insecure pickle loads',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Arbitrary code execution',
+        recommendation: 'Use json.loads() instead of pickle for security',
+        confidence: 0.95
       }];
 
       readFileSyncSpy.mockImplementation((path) => {
@@ -430,15 +434,17 @@ describe('comment-pr-findings.js', () => {
     });
 
     test('should generate correct yaml.load autofix', async () => {
-     
+
       const mockFindings = [{
-        path: 'config.py',
-        start: { line: 1 },
-        check_id: 'rules.insecure-yaml-loads-no-loader',
-        extra: {
-          message: 'Unsafe YAML deserialization',
-          fix: 'yaml.safe_load($DATA)'
-        }
+        file: 'config.py',
+        line: 1,
+        title: 'Unsafe YAML deserialization',
+        description: 'Unsafe YAML deserialization',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Arbitrary code execution via unsafe YAML deserialization',
+        recommendation: 'Use yaml.safe_load() instead',
+        confidence: 0.95
       }];
 
       readFileSyncSpy.mockImplementation((path) => {
@@ -489,15 +495,17 @@ describe('comment-pr-findings.js', () => {
     });
 
     test('should preserve indentation in autofix', async () => {
-     
+
       const mockFindings = [{
-        path: 'test.py',
-        start: { line: 1 },
-        check_id: 'rules.insecure-pickle-loads-autofix',
-        extra: {
-          message: 'Insecure pickle loads',
-          fix: 'json.loads($DATA)  # Use json.loads() instead of pickle for security'
-        }
+        file: 'test.py',
+        line: 1,
+        title: 'Insecure pickle loads',
+        description: 'Insecure pickle loads',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Arbitrary code execution',
+        recommendation: 'Use json.loads() instead of pickle for security',
+        confidence: 0.95
       }];
 
       readFileSyncSpy.mockImplementation((path) => {
@@ -814,7 +822,7 @@ describe('comment-pr-findings.js', () => {
 
   describe('Error Handling', () => {
     test('should handle GitHub API errors gracefully', async () => {
-     
+
       readFileSyncSpy.mockImplementation((path) => {
         if (path.includes('github-event.json')) {
           return JSON.stringify({
@@ -823,10 +831,15 @@ describe('comment-pr-findings.js', () => {
         }
         if (path === 'findings.json') {
           return JSON.stringify([{
-            path: 'test.py',
-            start: { line: 10 },
-            check_id: 'rules.insecure-pickle-loads-autofix',
-            extra: { message: 'Test', fix: 'test' }
+            file: 'test.py',
+            line: 10,
+            title: 'Test finding',
+            description: 'Test finding',
+            severity: 'HIGH',
+            category: 'security',
+            impact: 'Test impact',
+            recommendation: 'Test recommendation',
+            confidence: 0.95
           }]);
         }
         if (path === 'analysis-summary.json') {
@@ -856,10 +869,15 @@ describe('comment-pr-findings.js', () => {
 
     test('should skip files not in PR diff', async () => {
       const mockFindings = [{
-        path: 'not-in-diff.py',
-        start: { line: 10 },
-        check_id: 'rules.insecure-pickle-loads-autofix',
-        extra: { message: 'Test', fix: 'test' }
+        file: 'not-in-diff.py',
+        line: 10,
+        title: 'Test finding',
+        description: 'Test finding',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Test impact',
+        recommendation: 'Test recommendation',
+        confidence: 0.95
       }];
 
       readFileSyncSpy.mockImplementation((path) => {

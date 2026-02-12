@@ -310,9 +310,9 @@ async function run() {
 
       // Process findings synchronously (gh cli doesn't support async well)
       for (const finding of newFindings) {
-        const file = finding.file || finding.path;
-        const line = finding.line || (finding.start && finding.start.line) || 1;
-        const message = finding.description || (finding.extra && finding.extra.message) || 'Issue detected';
+        const file = finding.file;
+        const line = finding.line || 1;
+        const message = finding.description || 'Issue detected';
         const title = finding.title || message;
         const severity = finding.severity || 'HIGH';
         const category = finding.category || 'review_issue';
@@ -328,24 +328,19 @@ async function run() {
         commentBody += `**Severity:** ${severity}\n`;
         commentBody += `**Category:** ${category}\n`;
 
-        const extraMetadata = (finding.extra && finding.extra.metadata) || {};
-
-        // Add impact/exploit scenario if available
-        if (finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario) {
-          const impact = finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario;
-          commentBody += `\n**Impact:** ${impact}\n`;
+        // Add impact if available
+        if (finding.impact) {
+          commentBody += `\n**Impact:** ${finding.impact}\n`;
         }
 
         // Add recommendation if available
-        const recommendation = finding.recommendation || extraMetadata.recommendation;
-        if (recommendation) {
-          commentBody += `\n**Recommendation:** ${recommendation}\n`;
+        if (finding.recommendation) {
+          commentBody += `\n**Recommendation:** ${finding.recommendation}\n`;
         }
 
         // Add GitHub suggestion block if a code suggestion is available
-        const suggestion = finding.suggestion || extraMetadata.suggestion;
-        if (suggestion) {
-          commentBody += `\n\`\`\`suggestion\n${suggestion}\n\`\`\`\n`;
+        if (finding.suggestion) {
+          commentBody += `\n\`\`\`suggestion\n${finding.suggestion}\n\`\`\`\n`;
         }
 
         // Prepare the review comment
@@ -357,10 +352,10 @@ async function run() {
         };
 
         // Handle multi-line suggestions by adding start_line
-        const suggestionStartLine = finding.suggestion_start_line || extraMetadata.suggestion_start_line;
-        const suggestionEndLine = finding.suggestion_end_line || extraMetadata.suggestion_end_line;
+        const suggestionStartLine = finding.suggestion_start_line;
+        const suggestionEndLine = finding.suggestion_end_line;
 
-        if (suggestion && suggestionStartLine && suggestionEndLine && suggestionStartLine !== suggestionEndLine) {
+        if (finding.suggestion && suggestionStartLine && suggestionEndLine && suggestionStartLine !== suggestionEndLine) {
           // Multi-line suggestion: start_line is the first line, line is the last line
           reviewComment.start_line = suggestionStartLine;
           reviewComment.line = suggestionEndLine;
