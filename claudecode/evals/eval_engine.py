@@ -18,8 +18,8 @@ TIMEOUT_SHORT = 10
 TIMEOUT_GIT_OPERATION = 60
 TIMEOUT_FETCH = 1200
 TIMEOUT_CLONE = 1800
-TIMEOUT_WORKTREE = 300
-TIMEOUT_WORKTREE_CREATE = 1200
+TIMEOUT_WORKTREE = 1200
+TIMEOUT_WORKTREE_CREATE = 3600
 TIMEOUT_CLAUDECODE = 1800
 
 
@@ -37,18 +37,20 @@ class EvalResult:
     repo_name: str
     pr_number: int
     description: str
-    
+
     # Evaluation results
     success: bool
     runtime_seconds: float
     findings_count: int
     detected_issues: bool
-    
+
     # Optional fields
     error_message: str = ""
     findings_summary: Optional[List[Dict[str, Any]]] = None
     full_findings: Optional[List[Dict[str, Any]]] = None
-    
+    pr_summary: Optional[Dict[str, Any]] = None
+    analysis_summary: Optional[Dict[str, Any]] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
@@ -369,10 +371,14 @@ class EvaluationEngine:
             findings = []
             if parsed_results and 'findings' in parsed_results:
                 findings = parsed_results['findings']
-            
+
             findings_count = len(findings)
             detected_issues = findings_count > 0
-            
+
+            # Extract pr_summary and analysis_summary
+            pr_summary = parsed_results.get('pr_summary') if parsed_results else None
+            analysis_summary = parsed_results.get('analysis_summary') if parsed_results else None
+
             # Create findings summary
             findings_summary = []
             for finding in findings[:10]:  # Limit to first 10 for summary
@@ -385,7 +391,7 @@ class EvaluationEngine:
                     'description': finding.get('description', 'Unknown')
                 }
                 findings_summary.append(summary_item)
-            
+
             return EvalResult(
                 repo_name=test_case.repo_name,
                 pr_number=test_case.pr_number,
@@ -395,7 +401,9 @@ class EvaluationEngine:
                 findings_count=findings_count,
                 detected_issues=detected_issues,
                 findings_summary=findings_summary,
-                full_findings=findings
+                full_findings=findings,
+                pr_summary=pr_summary,
+                analysis_summary=analysis_summary
             )
             
         finally:
