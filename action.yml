@@ -213,8 +213,11 @@ runs:
         GH_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
       run: |
         # Get authenticated user (the bot making API calls)
-        if ! BOT_LOGIN=$(gh api user --jq '.login' 2>/dev/null); then
-          echo "Warning: Failed to detect bot identity, using default"
+        echo "Debug: GH_TOKEN is set: $([ -n "$GH_TOKEN" ] && echo 'yes' || echo 'no')"
+        echo "Debug: Attempting to detect bot identity..."
+
+        if ! BOT_LOGIN=$(gh api user --jq '.login' 2>&1); then
+          echo "Warning: Failed to detect bot identity (error: $BOT_LOGIN), using default"
           BOT_LOGIN="github-actions"
         fi
         echo "bot_login=$BOT_LOGIN" >> $GITHUB_OUTPUT
