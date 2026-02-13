@@ -15,10 +15,11 @@ import re
 import time 
 
 # Import existing components we can reuse
-from claudecode.prompts import get_unified_review_prompt
 from claudecode.findings_filter import FindingsFilter
 from claudecode.json_parser import parse_json_with_fallbacks
 from claudecode.format_pr_comments import format_pr_comments_for_prompt, is_bot_comment
+from claudecode.prompts import get_unified_review_prompt  # Backward-compatible import for tests/extensions.
+from claudecode.review_orchestrator import ReviewModelConfig, ReviewOrchestrator
 from claudecode.constants import (
     EXIT_CONFIGURATION_ERROR,
     DEFAULT_CLAUDE_MODEL,
@@ -186,33 +187,25 @@ class GitHubActionClient:
     
     def get_pr_diff(self, repo_name: str, pr_number: int) -> str:
         """Get complete PR diff in unified format.
-
+        
         Args:
             repo_name: Repository name in format "owner/repo"
             pr_number: Pull request number
-
+            
         Returns:
             Complete PR diff in unified format
         """
         url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}"
         headers = dict(self.headers)
         headers['Accept'] = 'application/vnd.github.diff'
-
+        
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-
+        
         return self._filter_generated_files(response.text)
 
     def get_pr_comments(self, repo_name: str, pr_number: int) -> List[Dict[str, Any]]:
-        """Get all review comments for a PR with pagination.
-
-        Args:
-            repo_name: Repository name in format "owner/repo"
-            pr_number: Pull request number
-
-        Returns:
-            List of comment dictionaries from GitHub API
-        """
+        """Get all review comments for a PR with pagination."""
         all_comments = []
         page = 1
         per_page = 100
@@ -230,13 +223,9 @@ class GitHubActionClient:
                     break
 
                 all_comments.extend(comments)
-
-                # Check if there are more pages
                 if len(comments) < per_page:
                     break
-
                 page += 1
-
             except requests.RequestException as e:
                 logger.warning(f"Failed to fetch comments page {page}: {e}")
                 break
@@ -244,15 +233,7 @@ class GitHubActionClient:
         return all_comments
 
     def get_comment_reactions(self, repo_name: str, comment_id: int) -> Dict[str, int]:
-        """Get reactions for a specific comment, excluding bot reactions.
-
-        Args:
-            repo_name: Repository name in format "owner/repo"
-            comment_id: The comment ID to fetch reactions for
-
-        Returns:
-            Dictionary with reaction counts (e.g., {'+1': 3, '-1': 1})
-        """
+        """Get reactions for a specific comment, excluding bot reactions."""
         url = f"https://api.github.com/repos/{repo_name}/pulls/comments/{comment_id}/reactions"
 
         try:
@@ -260,24 +241,19 @@ class GitHubActionClient:
             response.raise_for_status()
             reactions = response.json()
 
-            # Count reactions, excluding those from bots
-            counts = {}
+            counts: Dict[str, int] = {}
             for reaction in reactions:
                 user = reaction.get('user', {})
-                # Skip bot reactions (the bot adds its own 👍👎 as seeds)
                 if user.get('type') == 'Bot':
                     continue
-
                 content = reaction.get('content', '')
                 if content:
                     counts[content] = counts.get(content, 0) + 1
-
             return counts
-
         except requests.RequestException as e:
             logger.debug(f"Failed to fetch reactions for comment {comment_id}: {e}")
             return {}
-
+    
     def _is_excluded(self, filepath: str) -> bool:
         """Check if a file should be excluded based on directory or file patterns."""
         import fnmatch
@@ -310,6 +286,10 @@ class GitHubActionClient:
                 return True
 
         return False
+
+    def is_excluded(self, filepath: str) -> bool:
+        """Public wrapper for exclusion checks."""
+        return self._is_excluded(filepath)
     
     def _filter_generated_files(self, diff_text: str) -> str:
         """Filter out generated files and excluded directories from diff content."""
@@ -355,113 +335,121 @@ class SimpleClaudeRunner:
         else:
             self.timeout_seconds = SUBPROCESS_TIMEOUT
     
-    def run_code_review(self, repo_dir: Path, prompt: str) -> Tuple[bool, str, Dict[str, Any]]:
-        """Run Claude Code review.
-        
-        Args:
-            repo_dir: Path to repository directory
-            prompt: Code review prompt
-            
-        Returns:
-            Tuple of (success, error_message, parsed_results)
-        """
+    def run_prompt(
+        self,
+        repo_dir: Path,
+        prompt: str,
+        model: Optional[str] = None,
+        json_schema: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, str, Any]:
+        """Run a single Claude prompt and return parsed JSON payload or text."""
         if not repo_dir.exists():
             return False, f"Repository directory does not exist: {repo_dir}", {}
-        
-        # Check prompt size
+
         prompt_size = len(prompt.encode('utf-8'))
         if prompt_size > 1024 * 1024:  # 1MB
             print(f"[Warning] Large prompt size: {prompt_size / 1024 / 1024:.2f}MB", file=sys.stderr)
-        
+
+        model_name = model or DEFAULT_CLAUDE_MODEL
         try:
-            # Construct Claude Code command
-            # Use stdin for prompt to avoid "argument list too long" error
             cmd = [
                 'claude',
                 '--output-format', 'json',
-                '--model', DEFAULT_CLAUDE_MODEL,
+                '--model', model_name,
                 '--disallowed-tools', 'Bash(ps:*)',
-                '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA)
             ]
-            
-            # Run Claude Code with retry logic
+            if json_schema:
+                cmd.extend(['--json-schema', json.dumps(json_schema)])
+
             NUM_RETRIES = 3
             for attempt in range(NUM_RETRIES):
                 result = subprocess.run(
                     cmd,
-                    input=prompt,  # Pass prompt via stdin
+                    input=prompt,
                     cwd=repo_dir,
                     capture_output=True,
                     text=True,
                     timeout=self.timeout_seconds
                 )
 
-                # Parse JSON output (even if returncode != 0, to detect specific errors)
-                success, parsed_result = parse_json_with_fallbacks(result.stdout, "Claude Code output")
+                if result.returncode != 0:
+                    if attempt == NUM_RETRIES - 1:
+                        error_details = f"Claude Code execution failed with return code {result.returncode}\n"
+                        error_details += f"Stderr: {result.stderr}\n"
+                        error_details += f"Stdout: {result.stdout[:500]}..."
+                        return False, error_details, {}
+                    time.sleep(5 * (attempt + 1))
+                    continue
 
+                success, parsed_result = parse_json_with_fallbacks(result.stdout, "Claude Code output")
                 if success:
-                    # Check for "Prompt is too long" error that should trigger fallback to agentic mode
-                    if (isinstance(parsed_result, dict) and
-                        parsed_result.get('type') == 'result' and
+                    if (isinstance(parsed_result, dict) and 
+                        parsed_result.get('type') == 'result' and 
                         parsed_result.get('subtype') == 'success' and
                         parsed_result.get('is_error') and
                         parsed_result.get('result') == 'Prompt is too long'):
                         return False, "PROMPT_TOO_LONG", {}
 
-                    # Check for error_during_execution that should trigger retry
-                    if (isinstance(parsed_result, dict) and
-                        parsed_result.get('type') == 'result' and
+                    if (isinstance(parsed_result, dict) and 
+                        parsed_result.get('type') == 'result' and 
                         parsed_result.get('subtype') == 'error_during_execution' and
-                        attempt == 0):
-                        continue  # Retry
+                        attempt < NUM_RETRIES - 1):
+                        continue
 
-                    # If returncode is 0, extract review findings
-                    if result.returncode == 0:
-                        parsed_results = self._extract_review_findings(parsed_result)
-                        return True, "", parsed_results
+                    if isinstance(parsed_result, dict) and 'result' in parsed_result and isinstance(parsed_result['result'], str):
+                        nested_success, nested = parse_json_with_fallbacks(parsed_result['result'], "Claude result text")
+                        if nested_success:
+                            return True, "", nested
+                    return True, "", parsed_result
 
-                # Handle non-zero return codes after parsing
-                if result.returncode != 0:
-                    if attempt == NUM_RETRIES - 1:
-                        error_details = f"Claude Code execution failed with return code {result.returncode}\n"
-                        error_details += f"Stderr: {result.stderr}\n"
-                        error_details += f"Stdout: {result.stdout[:500]}..."  # First 500 chars
-                        return False, error_details, {}
-                    else:
-                        time.sleep(5*attempt)
-                        # Note: We don't do exponential backoff here to keep the runtime reasonable
-                        continue  # Retry
-
-                # Parse failed
                 if attempt == 0:
-                    continue  # Retry once
-                else:
-                    return False, "Failed to parse Claude output", {}
-            
+                    continue
+                return False, "Failed to parse Claude output", {}
+
             return False, "Unexpected error in retry logic", {}
-            
         except subprocess.TimeoutExpired:
             return False, f"Claude Code execution timed out after {self.timeout_seconds // 60} minutes", {}
         except Exception as e:
             return False, f"Claude Code execution error: {str(e)}", {}
+
+    def run_code_review(self, repo_dir: Path, prompt: str, model: Optional[str] = None) -> Tuple[bool, str, Dict[str, Any]]:
+        """Run code review prompt and normalize to findings payload."""
+        success, error_msg, parsed = self.run_prompt(
+            repo_dir,
+            prompt,
+            model=model or DEFAULT_CLAUDE_MODEL,
+            json_schema=REVIEW_OUTPUT_SCHEMA,
+        )
+        if not success:
+            return False, error_msg, {}
+        if isinstance(parsed, dict) and 'findings' in parsed:
+            return True, "", parsed
+        return True, "", self._extract_review_findings(parsed)
     
     def _extract_review_findings(self, claude_output: Any) -> Dict[str, Any]:
-        """Extract review findings and PR summary from Claude's JSON response."""
+        """Extract review findings from Claude's JSON response."""
         if isinstance(claude_output, dict):
-            # Only accept Claude Code wrapper with result field
-            # Direct format without wrapper is not supported
             if 'result' in claude_output:
                 result_text = claude_output['result']
                 if isinstance(result_text, str):
                     # Try to extract JSON from the result text
                     success, result_json = parse_json_with_fallbacks(result_text, "Claude result text")
-                    if success and result_json and 'findings' in result_json and 'pr_summary' in result_json:
+                    if success and result_json and 'findings' in result_json:
+                        if 'pr_summary' not in result_json:
+                            result_json['pr_summary'] = {}
                         return result_json
-
+        
         # Return empty structure if no findings found
         return {
             'findings': [],
-            'pr_summary': {}
+            'pr_summary': {},
+            'analysis_summary': {
+                'files_reviewed': 0,
+                'high_severity': 0,
+                'medium_severity': 0,
+                'low_severity': 0,
+                'review_completed': False,
+            }
         }
 
     def validate_claude_available(self) -> Tuple[bool, str]:
@@ -559,17 +547,14 @@ def initialize_findings_filter(custom_filtering_instructions: Optional[str] = No
         ConfigurationError: If filter initialization fails
     """
     try:
-        # Check if we should use heuristic (pattern-based) filtering
-        use_heuristic_filtering = os.environ.get('ENABLE_HEURISTIC_FILTERING', 'true').lower() == 'true'
-
         # Check if we should use Claude API filtering
         use_claude_filtering = os.environ.get('ENABLE_CLAUDE_FILTERING', 'false').lower() == 'true'
         api_key = os.environ.get('ANTHROPIC_API_KEY')
-
+        
         if use_claude_filtering and api_key:
             # Use full filtering with Claude API
             return FindingsFilter(
-                use_hard_exclusions=use_heuristic_filtering,
+                use_hard_exclusions=True,
                 use_claude_filtering=True,
                 api_key=api_key,
                 custom_filtering_instructions=custom_filtering_instructions
@@ -577,11 +562,26 @@ def initialize_findings_filter(custom_filtering_instructions: Optional[str] = No
         else:
             # Fallback to filtering with hard rules only
             return FindingsFilter(
-                use_hard_exclusions=use_heuristic_filtering,
+                use_hard_exclusions=True,
                 use_claude_filtering=False
             )
     except Exception as e:
         raise ConfigurationError(f'Failed to initialize findings filter: {str(e)}')
+
+
+def get_review_model_config() -> ReviewModelConfig:
+    """Resolve per-phase model configuration from environment."""
+    return ReviewModelConfig.from_env(os.environ, DEFAULT_CLAUDE_MODEL)
+
+
+def get_max_diff_lines() -> int:
+    """Return bounded inline diff budget in lines."""
+    max_diff_lines_str = os.environ.get('MAX_DIFF_LINES', '5000')
+    try:
+        parsed = int(max_diff_lines_str)
+    except ValueError:
+        parsed = 5000
+    return max(0, parsed)
 
 
 
@@ -744,35 +744,26 @@ def main():
             print(json.dumps({'error': f'Failed to fetch PR data: {str(e)}'}))
             sys.exit(EXIT_GENERAL_ERROR)
 
-        # Fetch PR comments and build review context
+        # Backward-compatible context collection for review thread history.
         review_context = None
         try:
             pr_comments = github_client.get_pr_comments(repo_name, pr_number)
             if pr_comments:
-                # Build threads: find bot comments, their replies, and reactions
                 bot_comment_threads = []
                 for comment in pr_comments:
                     if is_bot_comment(comment):
-                        # This is a bot comment (thread root)
                         reactions = github_client.get_comment_reactions(repo_name, comment['id'])
-
-                        # Find replies to this comment
                         replies = [
                             c for c in pr_comments
                             if c.get('in_reply_to_id') == comment['id']
                         ]
-                        # Sort replies by creation time
                         replies.sort(key=lambda c: c.get('created_at', ''))
-
                         bot_comment_threads.append({
                             'bot_comment': comment,
                             'replies': replies,
                             'reactions': reactions,
                         })
-
-                # Sort threads by bot comment creation time (oldest first)
                 bot_comment_threads.sort(key=lambda t: t['bot_comment'].get('created_at', ''))
-
                 if bot_comment_threads:
                     review_context = format_pr_comments_for_prompt(bot_comment_threads)
                     if review_context:
@@ -781,110 +772,52 @@ def main():
             logger.warning(f"Failed to fetch review context (continuing without it): {e}")
             review_context = None
 
-        # Determine whether to embed diff or use agentic file reading
-        max_diff_lines_str = os.environ.get('MAX_DIFF_LINES', '5000')
-        try:
-            max_diff_lines = int(max_diff_lines_str)
-        except ValueError:
-            max_diff_lines = 5000
-
+        max_diff_lines = get_max_diff_lines()
         diff_line_count = len(pr_diff.splitlines())
-        use_agentic_mode = max_diff_lines == 0 or diff_line_count > max_diff_lines
-
-        if use_agentic_mode:
-            print(f"[Info] Using agentic file reading mode (diff has {diff_line_count} lines, threshold: {max_diff_lines})", file=sys.stderr)
+        if max_diff_lines and diff_line_count > max_diff_lines:
+            print(f"[Info] Hybrid mode with truncated inline diff ({max_diff_lines}/{diff_line_count} lines)", file=sys.stderr)
         else:
-            print(f"[Debug] Embedding diff in prompt ({diff_line_count} lines)", file=sys.stderr)
+            print(f"[Info] Hybrid mode with full inline diff ({diff_line_count} lines)", file=sys.stderr)
 
         # Get repo directory from environment or use current directory
         repo_path = os.environ.get('REPO_PATH')
         repo_dir = Path(repo_path) if repo_path else Path.cwd()
+        model_config = get_review_model_config()
+        orchestrator = ReviewOrchestrator(
+            claude_runner=claude_runner,
+            findings_filter=findings_filter,
+            github_client=github_client,
+            model_config=model_config,
+            max_diff_lines=max_diff_lines,
+        )
 
-        def run_review(include_diff: bool):
-            prompt_text = get_unified_review_prompt(
-                pr_data,
-                pr_diff if include_diff else None,
-                include_diff=include_diff,
-                custom_review_instructions=custom_review_instructions,
-                custom_security_instructions=custom_security_instructions,
-                review_context=review_context,
-            )
-            return claude_runner.run_code_review(repo_dir, prompt_text), len(prompt_text)
-
-        all_findings = []
-        pr_summary_from_review = {}
-
-        try:
-            (success, error_msg, review_results), prompt_len = run_review(include_diff=not use_agentic_mode)
-
-            # Fallback to agentic mode if prompt still too long
-            if not success and error_msg == "PROMPT_TOO_LONG":
-                print(f"[Info] Prompt too long ({prompt_len} chars), falling back to agentic mode", file=sys.stderr)
-                (success, error_msg, review_results), prompt_len = run_review(include_diff=False)
-
-            if not success:
-                raise AuditError(f'Code review failed: {error_msg}')
-
-            pr_summary_from_review = review_results.get('pr_summary', {})
-            for finding in review_results.get('findings', []):
-                if isinstance(finding, dict):
-                    # Set review_type based on category
-                    category = finding.get('category', '').lower()
-                    if category == 'security':
-                        finding.setdefault('review_type', 'security')
-                    else:
-                        finding.setdefault('review_type', 'general')
-                all_findings.append(finding)
-
-        except AuditError as e:
-            print(json.dumps({'error': f'Code review failed: {str(e)}'}))
+        success, review_results, review_error = orchestrator.run(
+            repo_dir=repo_dir,
+            pr_data=pr_data,
+            pr_diff=pr_diff,
+            custom_review_instructions=custom_review_instructions,
+            custom_security_instructions=custom_security_instructions,
+        )
+        if not success:
+            print(json.dumps({'error': f'Code review failed: {review_error}'}))
             sys.exit(EXIT_GENERAL_ERROR)
 
-        # Filter findings to reduce false positives
-        original_findings = all_findings
-        
-        # Prepare PR context for better filtering
-        pr_context = {
-            'repo_name': repo_name,
-            'pr_number': pr_number,
-            'title': pr_data.get('title', ''),
-            'description': pr_data.get('body', '')
-        }
-        
-        # Apply findings filter (including final directory exclusion)
-        kept_findings, excluded_findings, analysis_summary = apply_findings_filter(
-            findings_filter, original_findings, pr_context, github_client
-        )
-        
-        # Prepare output summary
-        def severity_counts(findings_list):
-            high = len([f for f in findings_list if isinstance(f, dict) and f.get('severity', '').upper() == 'HIGH'])
-            medium = len([f for f in findings_list if isinstance(f, dict) and f.get('severity', '').upper() == 'MEDIUM'])
-            low = len([f for f in findings_list if isinstance(f, dict) and f.get('severity', '').upper() == 'LOW'])
-            return high, medium, low
-
-        high_count, medium_count, low_count = severity_counts(kept_findings)
-
-        # Calculate files_reviewed from pr_summary.file_changes
-        files_reviewed = 0
-        if isinstance(pr_summary_from_review, dict):
-            file_changes = pr_summary_from_review.get('file_changes', [])
-            if isinstance(file_changes, list):
-                # Count unique files from all 'files' arrays
-                all_files = set()
-                for entry in file_changes:
-                    if isinstance(entry, dict):
-                        files_list = entry.get('files', [])
-                        if isinstance(files_list, list):
-                            all_files.update(files_list)
-                files_reviewed = len(all_files)
+        findings = review_results.get('findings', [])
+        analysis_summary = review_results.get('analysis_summary', {})
+        high_count = len([f for f in findings if isinstance(f, dict) and f.get('severity', '').upper() == 'HIGH'])
+        medium_count = len([f for f in findings if isinstance(f, dict) and f.get('severity', '').upper() == 'MEDIUM'])
+        low_count = len([f for f in findings if isinstance(f, dict) and f.get('severity', '').upper() == 'LOW'])
+        files_reviewed = analysis_summary.get('files_reviewed', pr_data.get('changed_files', 0))
+        try:
+            files_reviewed = int(files_reviewed)
+        except (TypeError, ValueError):
+            files_reviewed = 0
 
         # Prepare output
         output = {
             'pr_number': pr_number,
             'repo': repo_name,
-            'pr_summary': pr_summary_from_review,
-            'findings': kept_findings,
+            'findings': findings,
             'analysis_summary': {
                 'files_reviewed': files_reviewed,
                 'high_severity': high_count,
@@ -892,20 +825,18 @@ def main():
                 'low_severity': low_count,
                 'review_completed': True
             },
-            'filtering_summary': {
-                'total_original_findings': len(original_findings),
-                'excluded_findings': len(excluded_findings),
-                'kept_findings': len(kept_findings),
-                'filter_analysis': analysis_summary,
-                'excluded_findings_details': excluded_findings  # Include full details of what was filtered
-            }
+            'filtering_summary': review_results.get('filtering_summary', {
+                'total_original_findings': len(findings),
+                'excluded_findings': 0,
+                'kept_findings': len(findings),
+            })
         }
         
         # Output JSON to stdout
         print(json.dumps(output, indent=2))
         
         # Exit with appropriate code
-        high_severity_count = len([f for f in kept_findings if f.get('severity', '').upper() == 'HIGH'])
+        high_severity_count = len([f for f in findings if isinstance(f, dict) and f.get('severity', '').upper() == 'HIGH'])
         sys.exit(EXIT_GENERAL_ERROR if high_severity_count > 0 else EXIT_SUCCESS)
         
     except Exception as e:

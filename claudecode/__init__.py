@@ -12,11 +12,16 @@ __author__ = "Anthropic"
 from claudecode.github_action_audit import (
     GitHubActionClient,
     SimpleClaudeRunner,
+    get_review_model_config,
     main
 )
+from claudecode.review_orchestrator import ReviewModelConfig, ReviewOrchestrator
 
 __all__ = [
     "GitHubActionClient",
     "SimpleClaudeRunner",
+    "ReviewModelConfig",
+    "ReviewOrchestrator",
+    "get_review_model_config",
     "main"
 ]

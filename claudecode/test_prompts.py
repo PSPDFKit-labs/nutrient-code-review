@@ -193,3 +193,11 @@ diff --git a/emoji.py b/emoji.py
         assert "PR SUMMARY GUIDELINES:" in prompt
         assert "2-4 sentences" in prompt
         assert "~10 words" in prompt
+
+    def test_build_hybrid_diff_section_max_lines_zero_omits_inline_diff(self):
+        from claudecode.prompts import _build_hybrid_diff_section
+
+        section = _build_hybrid_diff_section("diff --git a/a.py b/a.py\n+print('x')", 0)
+
+        assert "intentionally omitted" in section
+        assert "```diff" not in section

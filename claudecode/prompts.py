@@ -1,13 +1,47 @@
-"""Code review prompt templates."""
+"""Prompt templates for multi-phase PR review orchestration."""
+
+from typing import Any, Dict, List, Optional
+
+COMPLIANCE_EXTRA_FIELDS = ',\n      "rule_reference": "path/to/CLAUDE.md#section"'
+SECURITY_EXTRA_FIELDS = (
+    ',\n      "exploit_preconditions": "...",\n      "trust_boundary": "...",\n'
+    '      "cwe": "optional CWE-###"'
+)
 
 
-def _format_files_changed(pr_data):
+def _format_files_changed(pr_data: Dict[str, Any]) -> str:
     """Format changed files for prompt context."""
-    return "\n".join([f"- {f['filename']}" for f in pr_data['files']])
+    files = pr_data.get("files", [])
+    return "\n".join([f"- {f.get('filename', 'unknown')}" for f in files])
 
 
-def _build_diff_section(pr_diff, include_diff):
-    """Build prompt section for inline diff or agentic file reading."""
+def _build_hybrid_diff_section(pr_diff: str, max_lines: int) -> str:
+    """Build a bounded inline diff section while requiring tool-based context reads."""
+    if not pr_diff:
+        return "\nNo inline diff available. Use repository tools to inspect changed files.\n"
+    if max_lines == 0:
+        return (
+            "\nInline diff intentionally omitted (max-diff-lines=0). "
+            "Use repository tools to inspect changed files and context.\n"
+        )
+
+    lines = pr_diff.splitlines()
+    if max_lines > 0 and len(lines) > max_lines:
+        shown = "\n".join(lines[:max_lines])
+        truncated_note = (
+            f"\n[Diff truncated to {max_lines} lines out of {len(lines)} total lines. "
+            "You MUST use repository tools to inspect full context and missing hunks.]"
+        )
+        return f"\nINLINE DIFF ANCHOR (TRUNCATED):\n```diff\n{shown}\n```{truncated_note}\n"
+
+    return (
+        "\nINLINE DIFF ANCHOR:\n"
+        f"```diff\n{pr_diff}\n```\n"
+        "Use this as a starting point only. You MUST validate findings with repository tool reads.\n"
+    )
+
+def _build_diff_section(pr_diff: Optional[str], include_diff: bool) -> str:
+    """Build unified-prompt diff section for backward compatibility."""
     if pr_diff and include_diff:
         return f"""
 
@@ -32,173 +66,287 @@ To review effectively:
 """
 
 
+def _base_context_block(pr_data: Dict[str, Any], pr_diff: str, max_diff_lines: int) -> str:
+    """Shared context block used across prompts."""
+    files_changed = _format_files_changed(pr_data)
+    return f"""
+PR CONTEXT:
+- PR Number: {pr_data.get('number', 'unknown')}
+- Title: {pr_data.get('title', 'unknown')}
+- Author: {pr_data.get('user', 'unknown')}
+- Repository: {pr_data.get('head', {}).get('repo', {}).get('full_name', 'unknown')}
+- Files changed: {pr_data.get('changed_files', 0)}
+- Lines added: {pr_data.get('additions', 0)}
+- Lines deleted: {pr_data.get('deletions', 0)}
+- PR body: {pr_data.get('body', '') or 'No description'}
+
+MODIFIED FILES:
+{files_changed or '- None listed'}
+{_build_hybrid_diff_section(pr_diff, max_diff_lines)}
+MANDATORY CONTEXT VALIDATION RULES:
+1. You MUST use repository tools to read each relevant changed file before finalizing findings.
+2. For every finding, verify at least one additional contextual location (caller, callee, config, or sibling path).
+3. Do not rely on inline diff alone, even when diff is fully present.
+"""
+
+
+def _findings_output_schema(extra_fields: str = "") -> str:
+    return f"""
+OUTPUT JSON SCHEMA (exact keys):
+{{
+  "findings": [
+    {{
+      "file": "path/to/file.py",
+      "line": 42,
+      "severity": "HIGH|MEDIUM|LOW",
+      "category": "correctness|reliability|performance|maintainability|testing|security|compliance",
+      "title": "Short issue title",
+      "description": "What is wrong",
+      "impact": "Concrete failure mode or exploit path",
+      "recommendation": "Actionable fix",
+      "confidence": 0.93{extra_fields}
+    }}
+  ],
+  "analysis_summary": {{
+    "files_reviewed": 0,
+    "high_severity": 0,
+    "medium_severity": 0,
+    "low_severity": 0,
+    "review_completed": true
+  }}
+}}
+"""
+
+
+def build_triage_prompt(pr_data: Dict[str, Any], pr_diff: str, max_diff_lines: int) -> str:
+    """Prompt for triage phase."""
+    return f"""
+You are the triage specialist for a pull request review.
+
+{_base_context_block(pr_data, pr_diff, max_diff_lines)}
+
+Decide whether review should be skipped.
+Skip only if one of the following is true:
+- PR is clearly trivial and cannot contain correctness/security/compliance risk
+- PR is obviously generated deployment churn with no business logic changes
+- There are no meaningful code changes in reviewed files
+
+Return JSON only:
+{{
+  "skip_review": false,
+  "reason": "short reason",
+  "risk_level": "low|medium|high"
+}}
+"""
+
+
+def build_context_discovery_prompt(pr_data: Dict[str, Any], pr_diff: str, max_diff_lines: int) -> str:
+    """Prompt for context discovery phase."""
+    return f"""
+You are the repository context specialist.
+
+{_base_context_block(pr_data, pr_diff, max_diff_lines)}
+
+Tasks:
+1. Find relevant CLAUDE.md files: root and those in changed-file parent paths.
+2. Summarize PR intent and risky hotspots.
+3. Identify top files for deep review.
+
+Return JSON only:
+{{
+  "claude_md_files": ["path/CLAUDE.md"],
+  "change_summary": "brief summary",
+  "hotspots": ["path/to/file"],
+  "priority_files": ["path/to/file"]
+}}
+"""
+
+
+def build_compliance_prompt(
+    pr_data: Dict[str, Any],
+    pr_diff: str,
+    max_diff_lines: int,
+    discovered_context: Dict[str, Any],
+) -> str:
+    """Prompt for CLAUDE.md compliance analysis."""
+    context_json = discovered_context or {}
+    return f"""
+You are the CLAUDE.md compliance specialist.
+
+{_base_context_block(pr_data, pr_diff, max_diff_lines)}
+
+DISCOVERED CONTEXT:
+{context_json}
+
+Focus exclusively on clear CLAUDE.md violations in changed code. Cite concrete violated rule text in each finding.
+Reject ambiguous or preference-only claims.
+
+    {_findings_output_schema(COMPLIANCE_EXTRA_FIELDS)}
+
+Return JSON only.
+"""
+
+
+def build_quality_prompt(
+    pr_data: Dict[str, Any],
+    pr_diff: str,
+    max_diff_lines: int,
+    discovered_context: Dict[str, Any],
+    custom_review_instructions: Optional[str] = None,
+) -> str:
+    """Prompt for code quality analysis."""
+    custom_block = f"\nCUSTOM QUALITY INSTRUCTIONS:\n{custom_review_instructions}\n" if custom_review_instructions else ""
+    return f"""
+You are the code quality specialist.
+
+{_base_context_block(pr_data, pr_diff, max_diff_lines)}
+
+DISCOVERED CONTEXT:
+{discovered_context or {}}
+
+Focus on high-signal issues only:
+- correctness and logic defects
+- reliability regressions
+- significant performance regressions
+- maintainability risks with concrete failure/bug potential
+- testing gaps only when they block confidence for risky behavior
+
+Exclude style-only feedback and speculative concerns.
+{custom_block}
+{_findings_output_schema()}
+
+Return JSON only.
+"""
+
+
+def build_security_prompt(
+    pr_data: Dict[str, Any],
+    pr_diff: str,
+    max_diff_lines: int,
+    discovered_context: Dict[str, Any],
+    custom_security_instructions: Optional[str] = None,
+) -> str:
+    """Prompt for security analysis with explicit exploitability criteria."""
+    custom_block = (
+        f"\nCUSTOM SECURITY INSTRUCTIONS:\n{custom_security_instructions}\n"
+        if custom_security_instructions
+        else ""
+    )
+
+    return f"""
+You are the security specialist.
+
+{_base_context_block(pr_data, pr_diff, max_diff_lines)}
+
+DISCOVERED CONTEXT:
+{discovered_context or {}}
+
+Security review scope:
+- injection (SQL/command/template/NoSQL/path traversal)
+- authn/authz bypass and privilege escalation
+- unsafe deserialization and code execution paths
+- crypto and secrets handling flaws
+- sensitive data exposure and trust-boundary breaks
+
+For every security finding you MUST provide:
+1. exploit or abuse path
+2. required attacker preconditions
+3. impacted trust boundary or sensitive asset
+4. concrete mitigation
+
+Do NOT report:
+- generic DoS/rate-limiting comments without concrete exploitability
+- speculative attacks without evidence in changed code paths
+- issues outside modified scope unless required to prove exploitability
+{custom_block}
+    {_findings_output_schema(SECURITY_EXTRA_FIELDS)}
+
+Return JSON only.
+"""
+
+
+def build_validation_prompt(
+    pr_data: Dict[str, Any],
+    pr_diff: str,
+    max_diff_lines: int,
+    candidate_findings: List[Dict[str, Any]],
+) -> str:
+    """Prompt for finding validation and deduplication support."""
+    return f"""
+You are the validation specialist.
+
+{_base_context_block(pr_data, pr_diff, max_diff_lines)}
+
+CANDIDATE FINDINGS:
+{candidate_findings}
+
+Validate each finding with strict criteria:
+- must be reproducible or clearly inferable from changed code and surrounding context
+- must have concrete impact
+- confidence must be >= 0.8 to keep
+- if two findings are duplicates, keep the stronger one only
+
+Return JSON only:
+{{
+  "validated_findings": [
+    {{
+      "finding_index": 0,
+      "keep": true,
+      "confidence": 0.92,
+      "reason": "short reason"
+    }}
+  ]
+}}
+"""
+
+
 def get_unified_review_prompt(
-    pr_data,
-    pr_diff=None,
-    include_diff=True,
-    custom_review_instructions=None,
-    custom_security_instructions=None,
-    review_context=None,
-):
-    """Generate unified code review + security prompt for Claude Code.
-
-    This prompt covers both code quality (correctness, reliability, performance,
-    maintainability, testing) and security in a single pass.
-
-    Args:
-        pr_data: PR data dictionary from GitHub API
-        pr_diff: Optional complete PR diff in unified format
-        include_diff: Whether to include the diff in the prompt (default: True)
-        custom_review_instructions: Optional custom review instructions to append
-        custom_security_instructions: Optional custom security instructions to append
-        review_context: Optional previous review context (bot findings and user replies)
-
-    Returns:
-        Formatted prompt string
-    """
-
+    pr_data: Dict[str, Any],
+    pr_diff: Optional[str] = None,
+    include_diff: bool = True,
+    custom_review_instructions: Optional[str] = None,
+    custom_security_instructions: Optional[str] = None,
+    review_context: Optional[str] = None,
+) -> str:
+    """Backward-compatible unified prompt used by tests and direct calls."""
     files_changed = _format_files_changed(pr_data)
     diff_section = _build_diff_section(pr_diff, include_diff)
+    custom_review_section = f"\n{custom_review_instructions}\n" if custom_review_instructions else ""
+    custom_security_section = f"\n{custom_security_instructions}\n" if custom_security_instructions else ""
 
-    custom_review_section = ""
-    if custom_review_instructions:
-        custom_review_section = f"\n{custom_review_instructions}\n"
-
-    custom_security_section = ""
-    if custom_security_instructions:
-        custom_security_section = f"\n{custom_security_instructions}\n"
-
-    # Build PR description section
-    pr_description = pr_data.get('body', '').strip() if pr_data.get('body') else ''
+    pr_description = (pr_data.get('body', '') or '').strip()
     pr_description_section = ""
     if pr_description:
-        # Truncate very long descriptions
         if len(pr_description) > 2000:
             pr_description = pr_description[:2000] + "... (truncated)"
         pr_description_section = f"\nPR Description:\n{pr_description}\n"
 
-    # Build review context section (previous bot reviews and user replies)
-    review_context_section = ""
-    if review_context:
-        review_context_section = review_context
+    review_context_section = review_context or ""
 
     return f"""
-You are a senior engineer conducting a comprehensive code review of GitHub PR #{pr_data['number']}: "{pr_data['title']}"
+You are a senior engineer conducting a comprehensive code review of GitHub PR #{pr_data.get('number', 'unknown')}: "{pr_data.get('title', 'unknown')}"
 
 CONTEXT:
 - Repository: {pr_data.get('head', {}).get('repo', {}).get('full_name', 'unknown')}
-- Author: {pr_data['user']}
-- Files changed: {pr_data['changed_files']}
-- Lines added: {pr_data['additions']}
-- Lines deleted: {pr_data['deletions']}
+- Author: {pr_data.get('user', 'unknown')}
+- Files changed: {pr_data.get('changed_files', 0)}
+- Lines added: {pr_data.get('additions', 0)}
+- Lines deleted: {pr_data.get('deletions', 0)}
 {pr_description_section}
 Files modified:
 {files_changed}{diff_section}{review_context_section}
 
 OBJECTIVE:
-Perform a focused, high-signal code review to identify HIGH-CONFIDENCE issues introduced by this PR. This covers both code quality (correctness, reliability, performance, maintainability, testing) AND security. Do not comment on pre-existing issues or purely stylistic preferences.
-
-CRITICAL INSTRUCTIONS:
-1. MINIMIZE FALSE POSITIVES: Only flag issues where you're >80% confident they are real and impactful
-2. AVOID NOISE: Skip style nits, subjective preferences, or low-impact suggestions
-3. FOCUS ON IMPACT: Prioritize bugs, regressions, data loss, significant performance problems, or security vulnerabilities
-4. SCOPE: Only evaluate code introduced or modified in this PR. Ignore unrelated existing issues
+Perform a focused, high-signal code review to identify HIGH-CONFIDENCE issues introduced by this PR.
 
 CODE QUALITY CATEGORIES:
-
-**Correctness & Logic:**
-- Incorrect business logic or wrong results
-- Edge cases or null/empty handling regressions
-- Incorrect error handling or missing validations leading to bad state
-- Invariants broken by changes
-
-**Reliability & Resilience:**
-- Concurrency or race conditions introduced by changes
-- Resource leaks, timeouts, or missing retries in critical paths
-- Partial failure handling or inconsistent state updates
-- Idempotency or ordering issues
-
-**Performance & Scalability:**
-- Algorithmic regressions in hot paths (O(n^2) where O(n) expected)
-- N+1 query patterns
-- Excessive synchronous I/O in latency-sensitive code
-- Unbounded memory growth introduced by changes
-
-**Maintainability & Design:**
-- Changes that significantly increase complexity or make future changes risky
-- Tight coupling or unclear responsibility boundaries introduced
-- Misleading APIs or brittle contracts
-
-**Testing & Observability:**
-- Missing tests for high-risk changes
-- Lack of logging/metrics around new critical behavior
-- Flaky behavior due to nondeterministic changes
+- correctness, reliability, performance, maintainability, testing
 {custom_review_section}
 SECURITY CATEGORIES:
-
-**Input Validation Vulnerabilities:**
-- SQL injection via unsanitized user input
-- Command injection in system calls or subprocesses
-- XXE injection in XML parsing
-- Template injection in templating engines
-- NoSQL injection in database queries
-- Path traversal in file operations
-
-**Authentication & Authorization Issues:**
-- Authentication bypass logic
-- Privilege escalation paths
-- Session management flaws
-- JWT token vulnerabilities
-- Authorization logic bypasses
-
-**Crypto & Secrets Management:**
-- Hardcoded API keys, passwords, or tokens
-- Weak cryptographic algorithms or implementations
-- Improper key storage or management
-- Cryptographic randomness issues
-- Certificate validation bypasses
-
-**Injection & Code Execution:**
-- Remote code execution via deserialization
-- Pickle injection in Python
-- YAML deserialization vulnerabilities
-- Eval injection in dynamic code execution
-- XSS vulnerabilities in web applications (reflected, stored, DOM-based)
-
-**Data Exposure:**
-- Sensitive data logging or storage
-- PII handling violations
-- API endpoint data leakage
-- Debug information exposure
+- input validation, authn/authz, crypto/secrets, code execution, data exposure
 {custom_security_section}
-EXCLUSIONS - DO NOT REPORT:
-- Denial of Service (DOS) vulnerabilities or resource exhaustion attacks
-- Secrets/credentials stored on disk (these are managed separately)
-- Rate limiting concerns or service overload scenarios
-
-Additional notes:
-- Even if something is only exploitable from the local network, it can still be a HIGH severity issue
-
-ANALYSIS METHODOLOGY:
-
-Phase 1 - Repository Context Research (Use file search tools):
-- Identify existing patterns, conventions, and critical paths
-- Understand data flow, invariants, and error handling expectations
-- Look for established security frameworks and patterns
-
-Phase 2 - Comparative Analysis:
-- Compare new changes to existing patterns and contracts
-- Identify deviations that introduce risk, regressions, or security issues
-- Look for inconsistent handling between similar code paths
-
-Phase 3 - Issue Assessment:
-- Examine each modified file for code quality and security implications
-- Trace data flow from inputs to sensitive operations
-- Identify concurrency, state management, and injection risks
 
 REQUIRED OUTPUT FORMAT:
-
-You MUST output your findings as structured JSON with this exact schema:
 
 {{
   "pr_summary": {{
@@ -208,11 +356,6 @@ You MUST output your findings as structured JSON with this exact schema:
         "label": "src/auth.py",
         "files": ["src/auth.py"],
         "changes": "Brief description of changes (~10 words)"
-      }},
-      {{
-        "label": "tests/test_*.py",
-        "files": ["tests/test_auth.py", "tests/test_login.py"],
-        "changes": "Unit tests for authentication"
       }}
     ]
   }},
@@ -220,15 +363,12 @@ You MUST output your findings as structured JSON with this exact schema:
     {{
       "file": "path/to/file.py",
       "line": 42,
-      "severity": "HIGH",
+      "severity": "HIGH|MEDIUM|LOW",
       "category": "correctness|reliability|performance|maintainability|testing|security",
       "title": "Short summary of the issue",
       "description": "What is wrong and where it happens",
-      "impact": "Concrete impact or failure mode (use exploit scenario for security issues)",
+      "impact": "Concrete impact or failure mode",
       "recommendation": "Actionable fix or mitigation",
-      "suggestion": "Exact replacement code (optional). Can be multi-line. Must replace lines from suggestion_start_line to suggestion_end_line.",
-      "suggestion_start_line": 42,
-      "suggestion_end_line": 44,
       "confidence": 0.95
     }}
   ]
@@ -237,32 +377,5 @@ You MUST output your findings as structured JSON with this exact schema:
 PR SUMMARY GUIDELINES:
 - overview: 2-4 sentences describing WHAT changed and WHY (purpose/goal)
 - file_changes: One entry per file or group of related files
-  - label: Display name (single file path, or pattern like "tests/*.py" for groups)
-  - files: Array of actual file paths covered by this entry (used for counting)
-  - changes: Brief description (~10 words), focus on purpose not implementation
-  - Group related files when it improves readability (e.g., test files, config files)
-
-SUGGESTION GUIDELINES:
-- Only include `suggestion` if you can provide exact, working replacement code
-- For single-line fixes: set suggestion_start_line = suggestion_end_line = the line number
-- For multi-line fixes: set the range of lines being replaced
-- The suggestion replaces all lines from suggestion_start_line to suggestion_end_line (inclusive)
-
-SEVERITY GUIDELINES:
-- **HIGH**: Likely production bug, data loss, significant regression, or directly exploitable security vulnerability
-- **MEDIUM**: Real issue with limited scope or specific triggering conditions
-- **LOW**: Minor but real issue; use sparingly and only if clearly actionable
-
-CONFIDENCE SCORING:
-- 0.9-1.0: Certain issue with clear evidence and impact
-- 0.8-0.9: Strong signal with likely real-world impact
-- 0.7-0.8: Plausible issue but may require specific conditions
-- Below 0.7: Don't report (too speculative)
-
-FINAL REMINDER:
-Focus on HIGH and MEDIUM findings only. Better to miss some theoretical issues than flood the report with false positives. Each finding should be something a senior engineer would confidently raise in a PR review.
-
-Begin your analysis now. Use the repository exploration tools to understand the codebase context, then analyze the PR changes for code quality and security implications.
-
-Your final reply must contain the JSON and nothing else. You should not reply again after outputting the JSON.
+- changes: Brief description (~10 words), focus on purpose not implementation
 """

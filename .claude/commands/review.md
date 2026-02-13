@@ -40,6 +40,12 @@ To do this, follow these steps precisely:
    Agent 4: Opus security agent
    Look for security vulnerabilities in the introduced code. This includes injection, auth bypass, data exposure, unsafe deserialization, or other exploitable issues. Only look for issues that fall within the changed code.
 
+   Security evidence requirements for every reported issue:
+   - Include a concrete exploit or abuse path.
+   - Include attacker preconditions.
+   - Identify the impacted trust boundary or sensitive asset.
+   - Provide an actionable mitigation.
+
    **CRITICAL: We only want HIGH SIGNAL issues.** Flag issues where:
    - The code will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)
    - The code will definitely produce wrong results regardless of inputs (clear logic errors)
@@ -52,6 +58,7 @@ To do this, follow these steps precisely:
    - Subjective suggestions or improvements
    - Security issues that depend on speculative inputs or unverified assumptions
    - Denial of Service (DoS) or rate limiting issues without concrete exploitability
+   - Findings based only on diff snippets without validating surrounding repository context
 
    If you are not certain an issue is real, do not flag it. False positives erode trust and waste reviewer time.
 
