@@ -335,7 +335,13 @@ class SimpleClaudeRunner:
         else:
             self.timeout_seconds = SUBPROCESS_TIMEOUT
     
-    def run_prompt(self, repo_dir: Path, prompt: str, model: Optional[str] = None) -> Tuple[bool, str, Any]:
+    def run_prompt(
+        self,
+        repo_dir: Path,
+        prompt: str,
+        model: Optional[str] = None,
+        json_schema: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, str, Any]:
         """Run a single Claude prompt and return parsed JSON payload or text."""
         if not repo_dir.exists():
             return False, f"Repository directory does not exist: {repo_dir}", {}
@@ -351,8 +357,9 @@ class SimpleClaudeRunner:
                 '--output-format', 'json',
                 '--model', model_name,
                 '--disallowed-tools', 'Bash(ps:*)',
-                '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA),
             ]
+            if json_schema:
+                cmd.extend(['--json-schema', json.dumps(json_schema)])
 
             NUM_RETRIES = 3
             for attempt in range(NUM_RETRIES):
@@ -407,7 +414,12 @@ class SimpleClaudeRunner:
 
     def run_code_review(self, repo_dir: Path, prompt: str, model: Optional[str] = None) -> Tuple[bool, str, Dict[str, Any]]:
         """Run code review prompt and normalize to findings payload."""
-        success, error_msg, parsed = self.run_prompt(repo_dir, prompt, model=model or DEFAULT_CLAUDE_MODEL)
+        success, error_msg, parsed = self.run_prompt(
+            repo_dir,
+            prompt,
+            model=model or DEFAULT_CLAUDE_MODEL,
+            json_schema=REVIEW_OUTPUT_SCHEMA,
+        )
         if not success:
             return False, error_msg, {}
         if isinstance(parsed, dict) and 'findings' in parsed:
