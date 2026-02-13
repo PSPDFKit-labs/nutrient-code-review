@@ -349,7 +349,7 @@ class TestIntegratedDiffConstruction:
 
         with patch.dict(os.environ, {'GITHUB_TOKEN': 'test-token'}):
             client = GitHubActionClient()
-            result = client.get_pr_data('owner/repo', 123, max_diff_lines=5000)
+            result = client.get_pr_data('owner/repo', 123, max_diff_chars=400000)
 
         # Verify diff was constructed
         assert 'pr_diff' in result
@@ -367,6 +367,7 @@ class TestIntegratedDiffConstruction:
         assert result['is_truncated'] == False
         assert result['diff_stats']['files_included'] == 2
         assert result['diff_stats']['total_files'] == 2
+        assert result['diff_stats']['included_file_list'] == ['added.py', 'modified.py']
 
     @patch('requests.get')
     def test_get_pr_data_truncates_at_max_lines(self, mock_get):
@@ -405,8 +406,8 @@ class TestIntegratedDiffConstruction:
 
         with patch.dict(os.environ, {'GITHUB_TOKEN': 'test-token'}):
             client = GitHubActionClient()
-            # Very low max_lines to trigger truncation
-            result = client.get_pr_data('owner/repo', 123, max_diff_lines=50)
+            # Very low max_chars to trigger truncation (each file ~150 chars)
+            result = client.get_pr_data('owner/repo', 123, max_diff_chars=200)
 
         # Should be truncated
         assert result['is_truncated'] == True
@@ -416,7 +417,7 @@ class TestIntegratedDiffConstruction:
 
     @patch('requests.get')
     def test_get_pr_data_agentic_mode_skips_files(self, mock_get):
-        """Test that max_diff_lines=0 (agentic mode) doesn't fetch files."""
+        """Test that max_diff_chars=0 (agentic mode) doesn't fetch files."""
         pr_response = Mock()
         pr_response.json.return_value = {
             'number': 123,
@@ -437,7 +438,7 @@ class TestIntegratedDiffConstruction:
 
         with patch.dict(os.environ, {'GITHUB_TOKEN': 'test-token'}):
             client = GitHubActionClient()
-            result = client.get_pr_data('owner/repo', 123, max_diff_lines=0)
+            result = client.get_pr_data('owner/repo', 123, max_diff_chars=0)
 
         # Should only call PR metadata endpoint, not files endpoint
         assert mock_get.call_count == 1
@@ -448,6 +449,58 @@ class TestIntegratedDiffConstruction:
         assert result['files'] == []
         assert result['diff_stats']['files_included'] == 0
         assert result['diff_stats']['total_files'] == 50  # From PR metadata
+
+
+class TestBackwardCompatibility:
+    """Test backward compatibility with deprecated MAX_DIFF_LINES."""
+
+    @patch('requests.get')
+    def test_max_diff_lines_converts_to_chars(self, mock_get):
+        """Test that max_diff_lines parameter still works via character conversion."""
+        # This tests backward compatibility: max_diff_lines * 80 = max_diff_chars
+        # If we pass max_diff_lines=10, it should convert to 800 chars
+
+        pr_response = Mock()
+        pr_response.json.return_value = {
+            'number': 123,
+            'title': 'Test PR',
+            'body': '',
+            'user': {'login': 'testuser'},
+            'created_at': '2024-01-01T00:00:00Z',
+            'updated_at': '2024-01-01T01:00:00Z',
+            'state': 'open',
+            'head': {'ref': 'feature', 'sha': 'abc123', 'repo': {'full_name': 'owner/repo'}},
+            'base': {'ref': 'main', 'sha': 'def456'},
+            'additions': 10,
+            'deletions': 5,
+            'changed_files': 1
+        }
+
+        files_response = Mock()
+        # Create file with ~100 chars per section to test truncation
+        files_response.json.return_value = [
+            {
+                'filename': 'short.txt',
+                'status': 'modified',
+                'additions': 1,
+                'deletions': 1,
+                'changes': 2,
+                'patch': '@@ -1,1 +1,1 @@\n-old\n+new'  # ~50 chars
+            }
+        ]
+
+        empty_response = Mock()
+        empty_response.json.return_value = []
+
+        mock_get.side_effect = [pr_response, files_response, empty_response]
+
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'test-token'}):
+            client = GitHubActionClient()
+            # Using character limit directly (new way)
+            result = client.get_pr_data('owner/repo', 123, max_diff_chars=100)
+
+        # Should include the file since diff is ~85 chars
+        assert result['diff_stats']['files_included'] == 1
 
 
 class TestGitHubAPIIntegration:

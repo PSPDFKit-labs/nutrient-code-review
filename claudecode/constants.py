@@ -13,6 +13,11 @@ RATE_LIMIT_BACKOFF_MAX = 30  # Maximum backoff time for rate limits
 # Token Limits
 PROMPT_TOKEN_LIMIT = 16384  # 16k tokens max for claude-opus-4
 
+# Diff Construction Limits
+DEFAULT_MAX_DIFF_CHARS = 400000  # 400k characters (suitable for 200k token models)
+# Conversion factor for deprecated MAX_DIFF_LINES -> MAX_DIFF_CHARS
+CHARS_PER_LINE_ESTIMATE = 80  # Average characters per line for conversion
+
 # Exit Codes
 EXIT_SUCCESS = 0
 EXIT_GENERAL_ERROR = 1

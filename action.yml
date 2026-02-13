@@ -64,10 +64,25 @@ inputs:
     required: false
     default: ''
 
-  max-diff-lines:
-    description: 'Maximum diff lines to embed in prompt. Larger diffs use agentic file reading instead. Set to 0 to always use agentic mode. Default: 5000'
+  max-diff-chars:
+    description: |
+      Maximum diff characters to embed in prompt (default: 400000 = 400k chars).
+      Larger diffs use agentic file reading instead. Set to 0 to always use agentic mode.
+
+      IMPORTANT: For large limits (>400k), use a model with larger context like:
+      - claude-sonnet-4-5-20250929 (1M context) for diffs up to 800k chars
+      - Set via 'claude-model' input parameter
+
+      Note: ~400k chars fits comfortably in 200k token models (Opus/Sonnet standard).
     required: false
-    default: '5000'
+    default: '400000'
+
+  max-diff-lines:
+    description: |
+      [DEPRECATED] Use 'max-diff-chars' instead. This converts lines to chars (line * 80).
+      Kept for backward compatibility only. If both set, max-diff-chars takes precedence.
+    required: false
+    default: ''
 
   trigger-on-open:
     description: 'Run review when PR is first opened'
@@ -423,6 +438,7 @@ runs:
         CUSTOM_SECURITY_SCAN_INSTRUCTIONS: ${{ inputs.custom-security-scan-instructions }}
         CLAUDE_MODEL: ${{ inputs.claude-model }}
         CLAUDECODE_TIMEOUT: ${{ inputs.claudecode-timeout }}
+        MAX_DIFF_CHARS: ${{ inputs.max-diff-chars }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
