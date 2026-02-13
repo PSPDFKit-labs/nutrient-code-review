@@ -215,13 +215,13 @@ runs:
           fi
         fi
 
-        # Method 2: Try installation endpoint (works for GitHub App tokens)
+        # Method 2: Try /app endpoint (works for GitHub App tokens)
         if [ -z "$BOT_LOGIN" ]; then
-          if INSTALLATION_DATA=$(gh api "repos/$GITHUB_REPOSITORY/installation" 2>/dev/null); then
-            APP_SLUG=$(echo "$INSTALLATION_DATA" | jq -r '.app_slug // empty' 2>/dev/null)
+          if APP_DATA=$(gh api app 2>/dev/null); then
+            APP_SLUG=$(echo "$APP_DATA" | jq -r '.slug // empty' 2>/dev/null)
             if [ -n "$APP_SLUG" ] && [ "$APP_SLUG" != "null" ]; then
               BOT_LOGIN="${APP_SLUG}[bot]"
-              echo "Detected bot via installation endpoint: $BOT_LOGIN"
+              echo "Detected bot via /app endpoint: $BOT_LOGIN"
             fi
           fi
         fi
