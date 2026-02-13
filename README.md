@@ -16,6 +16,8 @@ Based on the original work from [anthropics/claude-code-security-review](https:/
 
 ## Quick Start
 
+### Basic Setup (Default GitHub Token)
+
 Add this to your repository's `.github/workflows/code-review.yml`:
 
 ```yaml
@@ -51,6 +53,50 @@ jobs:
           require-label: 'READY TO REVIEW' # If this isn't set, the action will trigger any time *any* label is applied
 ```
 
+### GitHub App Setup (Recommended for Organizations)
+
+For custom bot name/avatar and better mention detection:
+
+```yaml
+name: Code Review
+
+permissions:
+  pull-requests: write
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, review_requested]
+  issue_comment:
+    types: [created]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+
+      - name: Generate App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1.9.0
+        with:
+          app-id: ${{ secrets.CODE_REVIEW_APP_ID }}
+          private-key: ${{ secrets.CODE_REVIEW_APP_PRIVATE_KEY }}
+
+      - uses: PSPDFKit-labs/nutrient-code-review@main
+        with:
+          claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          app-slug: ${{ steps.app-token.outputs.app-slug }}
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+```
+
+**Note**: The `app-slug` parameter enables the bot to detect when it's mentioned in PR comments (e.g., `@my-code-review-app`). Requires `actions/create-github-app-token@v1.9.0` or later.
+
 ## Security Considerations
 
 This action is not hardened against prompt injection attacks and should only be used to review trusted PRs. We recommend [configuring your repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#controlling-changes-from-forks-to-workflows-in-public-repositories) to use the "Require approval for all external contributors" option to ensure workflows only run after a maintainer has reviewed the PR.
@@ -79,6 +125,7 @@ This action is not hardened against prompt injection attacks and should only be 
 | `custom-security-scan-instructions` | Path to custom security scan instructions text file to append to the security section | None | No |
 | `dismiss-stale-reviews` | Dismiss previous bot reviews when posting a new review (useful for follow-up commits) | `true` | No |
 | `skip-draft-prs` | Skip code review on draft pull requests | `true` | No |
+| `app-slug` | GitHub App slug for bot mention detection. If using `actions/create-github-app-token@v1.9.0+`, pass `${{ steps.app-token.outputs.app-slug }}`. Otherwise defaults to `github-actions`. | `github-actions` | No |
 | `require-label` | Only run review if this label is present. Leave empty to review all PRs. Add `labeled` to your workflow `pull_request` types to trigger on label addition. | None | No |
 
 ### Action Outputs
