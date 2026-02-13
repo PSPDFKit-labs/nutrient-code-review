@@ -9,10 +9,8 @@ from claudecode.github_action_audit import (
     get_environment_config,
     initialize_clients,
     initialize_findings_filter,
-    run_code_review,
     apply_findings_filter,
     ConfigurationError,
-    AuditError
 )
 from claudecode.findings_filter import FindingsFilter
 
@@ -144,34 +142,6 @@ class TestHelperFunctions:
             result = initialize_findings_filter()
             
             assert result == mock_filter_instance
-    
-    def test_run_code_review_success(self):
-        """Test successful code review execution."""
-        mock_runner = MagicMock()
-        mock_runner.run_code_review.return_value = (
-            True,
-            "",
-            {"findings": [{"id": 1}], "analysis_summary": {}}
-        )
-        
-        result = run_code_review(mock_runner, "test prompt")
-        
-        assert result == {"findings": [{"id": 1}], "analysis_summary": {}}
-        mock_runner.run_code_review.assert_called_once()
-    
-    def test_run_code_review_failure(self):
-        """Test code review execution failure."""
-        mock_runner = MagicMock()
-        mock_runner.run_code_review.return_value = (
-            False,
-            "Audit failed: timeout",
-            {}
-        )
-        
-        with pytest.raises(AuditError) as exc_info:
-            run_code_review(mock_runner, "test prompt")
-        
-        assert "Code review failed: Audit failed: timeout" in str(exc_info.value)
     
     def test_apply_findings_filter_with_findings_filter(self):
         """Test applying FindingsFilter to findings."""

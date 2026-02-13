@@ -58,12 +58,6 @@ inputs:
     required: false
     default: 'claude-sonnet-4-5'
 
-  run-every-commit:
-    description: 'DEPRECATED: Use trigger-on-commit instead. Run ClaudeCode on every commit (skips cache check). Warning: This may lead to more false positives on PRs with many commits as the AI analyzes the same code multiple times.'
-    required: false
-    default: 'false'
-    deprecationMessage: 'run-every-commit is deprecated. Use trigger-on-commit instead for more granular control over when reviews run.'
-
   false-positive-filtering-instructions:
     description: 'Path to custom false positive filtering instructions text file'
     required: false
@@ -274,7 +268,6 @@ runs:
         GITHUB_EVENT_NAME: ${{ github.event_name }}
         PR_NUMBER: ${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}
         GITHUB_SHA: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha || github.sha }}
-        RUN_EVERY_COMMIT: ${{ inputs.run-every-commit }}
         TRIGGER_ON_OPEN: ${{ inputs.trigger-on-open }}
         TRIGGER_ON_COMMIT: ${{ inputs.trigger-on-commit }}
         TRIGGER_ON_REVIEW_REQUEST: ${{ inputs.trigger-on-review-request }}

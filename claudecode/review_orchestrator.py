@@ -87,8 +87,7 @@ class ReviewOrchestrator:
         checker = getattr(self.github_client, "is_excluded", None)
         if callable(checker):
             return bool(checker(filepath))
-        # Fallback for current client/tests that still expose private method.
-        return bool(self.github_client._is_excluded(filepath))
+        raise AttributeError("github_client must implement is_excluded(filepath)")
 
     def _collect_phase_findings(self, phase_result: Dict[str, Any], source_agent: str) -> List[Dict[str, Any]]:
         findings: List[Dict[str, Any]] = []

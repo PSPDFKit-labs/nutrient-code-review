@@ -35,7 +35,7 @@ teardown_test() {
     # Unset all environment variables that tests might set
     unset GITHUB_EVENT_NAME PR_NUMBER GITHUB_SHA TRIGGER_TYPE
     unset TRIGGER_ON_OPEN TRIGGER_ON_COMMIT TRIGGER_ON_REVIEW_REQUEST TRIGGER_ON_MENTION
-    unset RUN_EVERY_COMMIT SKIP_DRAFT_PRS IS_DRAFT REQUIRE_LABEL PR_LABELS IS_PR
+    unset SKIP_DRAFT_PRS IS_DRAFT REQUIRE_LABEL PR_LABELS IS_PR
 }
 
 # Helper to run the script and capture output
@@ -143,24 +143,6 @@ test_commit_trigger_with_new_input() {
     teardown_test
 }
 
-test_commit_trigger_with_legacy_input() {
-    echo "Test: Commit trigger with run-every-commit (legacy) enabled"
-    setup_test
-
-    export GITHUB_EVENT_NAME="pull_request"
-    export PR_NUMBER="123"
-    export GITHUB_SHA="abc123"
-    export TRIGGER_TYPE="commit"
-    export TRIGGER_ON_COMMIT="false"
-    export RUN_EVERY_COMMIT="true"
-
-    run_script
-
-    assert_equals "true" "$ENABLE_CLAUDECODE" "Should enable for legacy run-every-commit"
-
-    teardown_test
-}
-
 test_commit_trigger_disabled() {
     echo "Test: Commit trigger disabled"
     setup_test
@@ -170,7 +152,6 @@ test_commit_trigger_disabled() {
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="commit"
     export TRIGGER_ON_COMMIT="false"
-    export RUN_EVERY_COMMIT="false"
 
     run_script
 
@@ -453,7 +434,6 @@ test_unsupported_event_type
 test_pull_request_event_open_trigger_enabled
 test_pull_request_event_open_trigger_disabled
 test_commit_trigger_with_new_input
-test_commit_trigger_with_legacy_input
 test_commit_trigger_disabled
 test_review_request_trigger
 test_mention_trigger

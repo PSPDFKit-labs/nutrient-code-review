@@ -118,7 +118,6 @@ This action is not hardened against prompt injection attacks and should only be 
 | `model-security` | Model used for security phase. | `claude-opus-4-6` | No |
 | `model-validation` | Model used for finding validation phase. | `claude-sonnet-4-5` | No |
 | `claudecode-timeout` | Timeout for ClaudeCode analysis in minutes | `20` | No |
-| `run-every-commit` | Run ClaudeCode on every commit (skips cache check). Warning: May increase false positives on PRs with many commits. **Deprecated**: Use `trigger-on-commit` instead. | `false` | No |
 | `trigger-on-open` | Run review when PR is first opened | `true` | No |
 | `trigger-on-commit` | Run review on every new commit | `false` | No |
 | `trigger-on-review-request` | Run review when someone requests a review from the bot | `true` | No |
@@ -128,7 +127,6 @@ This action is not hardened against prompt injection attacks and should only be 
 | `false-positive-filtering-instructions` | Path to custom false positive filtering instructions text file | None | No |
 | `custom-review-instructions` | Path to custom code review instructions text file to append to the audit prompt | None | No |
 | `custom-security-scan-instructions` | Path to custom security scan instructions text file to append to the security section | None | No |
-| `dismiss-stale-reviews` | Dismiss previous bot reviews when posting a new review (useful for follow-up commits) | `true` | No |
 | `skip-draft-prs` | Skip code review on draft pull requests | `true` | No |
 | `app-slug` | GitHub App slug for bot mention detection. If using `actions/create-github-app-token@v1.9.0+`, pass `${{ steps.app-token.outputs.app-slug }}`. Otherwise defaults to `github-actions`. | `github-actions` | No |
 | `require-label` | Only run review if this label is present. Leave empty to review all PRs. Add `labeled` to your workflow `pull_request` types to trigger on label addition. | None | No |

@@ -288,8 +288,8 @@ index 8901234..5678901 100644
                 assert exc_info.value.code == 1
         
         # Verify API calls
-        # 5 calls: PR data, files, diff, comments, reactions for bot comment
-        assert mock_get.call_count == 5
+        # 3 calls: PR data, files, diff
+        assert mock_get.call_count == 3
         assert mock_run.call_count == 7  # 1 version check + 6 phase calls
         
         # Verify the audit was run with proper prompt

@@ -12,7 +12,6 @@
 #   - TRIGGER_ON_COMMIT: Whether to run on new commits (true/false)
 #   - TRIGGER_ON_REVIEW_REQUEST: Whether to run on review requests (true/false)
 #   - TRIGGER_ON_MENTION: Whether to run on bot mentions (true/false)
-#   - RUN_EVERY_COMMIT: Legacy flag for running on commits (true/false)
 #   - SKIP_DRAFT_PRS: Whether to skip draft PRs (true/false)
 #   - IS_DRAFT: Whether the PR is a draft (true/false)
 #   - REQUIRE_LABEL: Required label name (optional)
@@ -54,9 +53,8 @@ if [ "$ENABLE_CLAUDECODE" == "true" ]; then
       fi
       ;;
     commit)
-      # Check both new and legacy input names (run-every-commit is alias for trigger-on-commit)
-      if [ "${TRIGGER_ON_COMMIT:-false}" != "true" ] && [ "${RUN_EVERY_COMMIT:-false}" != "true" ]; then
-        echo "Trigger 'commit' is disabled via trigger-on-commit/run-every-commit input"
+      if [ "${TRIGGER_ON_COMMIT:-false}" != "true" ]; then
+        echo "Trigger 'commit' is disabled via trigger-on-commit input"
         ENABLE_CLAUDECODE="false"
       fi
       ;;
