@@ -59,6 +59,11 @@ inputs:
     required: false
     default: 'true'
 
+  app-slug:
+    description: 'GitHub App slug for bot mentions (e.g., "my-code-review-app"). Defaults to "github-actions".'
+    required: false
+    default: 'github-actions'
+
   require-label:
     description: 'Only run review if this label is present on the PR. Leave empty to review all PRs. To trigger on label addition, add "labeled" to your workflow pull_request types.'
     required: false
@@ -196,45 +201,6 @@ runs:
         restore-keys: |
           claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-
 
-    - name: Detect bot identity
-      id: bot-identity
-      shell: bash
-      env:
-        GH_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-      run: |
-        # Get authenticated user (the bot making API calls)
-        # Note: /user endpoint doesn't work with GitHub App tokens, so we try multiple methods
-        BOT_LOGIN=""
-
-        # Method 1: Try /user endpoint (works for PATs, not GitHub App tokens)
-        if [ -z "$BOT_LOGIN" ]; then
-          if BOT_LOGIN_TMP=$(gh api user --jq '.login' 2>/dev/null); then
-            BOT_LOGIN="$BOT_LOGIN_TMP"
-            echo "Detected bot via /user endpoint: $BOT_LOGIN"
-          fi
-        fi
-
-        # Method 2: Try /app endpoint (works for GitHub App tokens)
-        if [ -z "$BOT_LOGIN" ]; then
-          if APP_DATA=$(gh api app 2>/dev/null); then
-            APP_SLUG=$(echo "$APP_DATA" | jq -r '.slug // empty' 2>/dev/null)
-            if [ -n "$APP_SLUG" ] && [ "$APP_SLUG" != "null" ]; then
-              BOT_LOGIN="${APP_SLUG}[bot]"
-              echo "Detected bot via /app endpoint: $BOT_LOGIN"
-            fi
-          fi
-        fi
-
-        # Method 3: Fallback to default
-        if [ -z "$BOT_LOGIN" ]; then
-          BOT_LOGIN="github-actions"
-          echo "Using default bot identity: $BOT_LOGIN"
-        fi
-
-        echo "bot_login=$BOT_LOGIN" >> $GITHUB_OUTPUT
-        echo "Detected bot identity: $BOT_LOGIN"
-
     - name: Detect trigger type
       id: trigger-detection
       shell: bash
@@ -242,7 +208,7 @@ runs:
         EVENT_NAME: ${{ github.event_name }}
         EVENT_ACTION: ${{ github.event.action }}
         COMMENT_BODY: ${{ github.event.comment.body }}
-        BOT_LOGIN: ${{ steps.bot-identity.outputs.bot_login }}
+        APP_SLUG: ${{ inputs.app-slug }}
       run: |
         TRIGGER_TYPE="unknown"
 
@@ -264,11 +230,11 @@ runs:
         elif [ "$EVENT_NAME" == "issue_comment" ]; then
           # Check if comment mentions this specific bot
           # Escape special regex characters in bot login to prevent regex injection
-          if [ -n "$BOT_LOGIN" ]; then
-            ESCAPED_BOT=$(printf '%s\n' "$BOT_LOGIN" | sed 's/[]\/$*.^[]/\\&/g')
+          if [ -n "APP_SLUG" ]; then
+            ESCAPED_BOT=$(printf '%s\n' "APP_SLUG" | sed 's/[]\/$*.^[]/\\&/g')
             if echo "$COMMENT_BODY" | grep -qE "@${ESCAPED_BOT}\\b"; then
               TRIGGER_TYPE="mention"
-              echo "Detected mention of @$BOT_LOGIN in comment"
+              echo "Detected mention of @APP_SLUG in comment"
             fi
           fi
         fi
@@ -543,7 +509,7 @@ runs:
         GH_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}
-        BOT_LOGIN: ${{ steps.bot-identity.outputs.bot_login }}
+        BOT_LOGIN: ${{ inputs.app-slug }}[bot]
       run: |
         # Request the bot as a reviewer to make it appear in the PR's reviewer list
         # This is optional and will fail silently if the bot is already a reviewer or doesn't have permissions
