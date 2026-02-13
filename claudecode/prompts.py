@@ -38,6 +38,7 @@ def get_unified_review_prompt(
     include_diff=True,
     custom_review_instructions=None,
     custom_security_instructions=None,
+    review_context=None,
 ):
     """Generate unified code review + security prompt for Claude Code.
 
@@ -50,6 +51,7 @@ def get_unified_review_prompt(
         include_diff: Whether to include the diff in the prompt (default: True)
         custom_review_instructions: Optional custom review instructions to append
         custom_security_instructions: Optional custom security instructions to append
+        review_context: Optional previous review context (bot findings and user replies)
 
     Returns:
         Formatted prompt string
@@ -66,6 +68,20 @@ def get_unified_review_prompt(
     if custom_security_instructions:
         custom_security_section = f"\n{custom_security_instructions}\n"
 
+    # Build PR description section
+    pr_description = pr_data.get('body', '').strip() if pr_data.get('body') else ''
+    pr_description_section = ""
+    if pr_description:
+        # Truncate very long descriptions
+        if len(pr_description) > 2000:
+            pr_description = pr_description[:2000] + "... (truncated)"
+        pr_description_section = f"\nPR Description:\n{pr_description}\n"
+
+    # Build review context section (previous bot reviews and user replies)
+    review_context_section = ""
+    if review_context:
+        review_context_section = review_context
+
     return f"""
 You are a senior engineer conducting a comprehensive code review of GitHub PR #{pr_data['number']}: "{pr_data['title']}"
 
@@ -75,9 +91,9 @@ CONTEXT:
 - Files changed: {pr_data['changed_files']}
 - Lines added: {pr_data['additions']}
 - Lines deleted: {pr_data['deletions']}
-
+{pr_description_section}
 Files modified:
-{files_changed}{diff_section}
+{files_changed}{diff_section}{review_context_section}
 
 OBJECTIVE:
 Perform a focused, high-signal code review to identify HIGH-CONFIDENCE issues introduced by this PR. This covers both code quality (correctness, reliability, performance, maintainability, testing) AND security. Do not comment on pre-existing issues or purely stylistic preferences.

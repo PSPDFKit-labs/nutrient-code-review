@@ -121,8 +121,85 @@ index 8901234..5678901 100644
 +    }
 +}'''
         
-        mock_get.side_effect = [pr_response, files_response, diff_response]
-        
+        # PR comments response - includes a bot comment with the marker and a user reply
+        comments_response = Mock()
+        comments_response.json.return_value = [
+            {
+                'id': 101,
+                'node_id': 'PRRC_101',
+                'url': 'https://api.github.com/repos/company/app/pulls/comments/101',
+                'html_url': 'https://github.com/company/app/pull/456#discussion_r101',
+                'body': '🤖 **Code Review Finding: HIGH - sql_injection**\n\nSQL injection vulnerability in oauth2.py',
+                'user': {
+                    'login': 'github-actions[bot]',
+                    'id': 41898282,
+                    'type': 'Bot'
+                },
+                'created_at': '2024-01-15T12:00:00Z',
+                'updated_at': '2024-01-15T12:00:00Z',
+                'path': 'src/auth/oauth2.py',
+                'line': 11,
+                'author_association': 'NONE'
+            },
+            {
+                'id': 102,
+                'node_id': 'PRRC_102',
+                'url': 'https://api.github.com/repos/company/app/pulls/comments/102',
+                'html_url': 'https://github.com/company/app/pull/456#discussion_r102',
+                'body': 'Thanks for catching this! I will fix it.',
+                'user': {
+                    'login': 'developer',
+                    'id': 12345,
+                    'type': 'User'
+                },
+                'created_at': '2024-01-15T13:00:00Z',
+                'updated_at': '2024-01-15T13:00:00Z',
+                'in_reply_to_id': 101,
+                'author_association': 'COLLABORATOR'
+            }
+        ]
+
+        # Reactions response for the bot comment - multiple reactions from humans
+        reactions_response = Mock()
+        reactions_response.status_code = 200
+        reactions_response.json.return_value = [
+            {
+                'id': 1,
+                'node_id': 'MDg6UmVhY3Rpb24x',
+                'user': {
+                    'login': 'reviewer',
+                    'id': 54321,
+                    'type': 'User'
+                },
+                'content': '+1',
+                'created_at': '2024-01-15T14:00:00Z'
+            },
+            {
+                'id': 2,
+                'node_id': 'MDg6UmVhY3Rpb24y',
+                'user': {
+                    'login': 'teammate',
+                    'id': 67890,
+                    'type': 'User'
+                },
+                'content': 'eyes',
+                'created_at': '2024-01-15T14:05:00Z'
+            },
+            {
+                'id': 3,
+                'node_id': 'MDg6UmVhY3Rpb24z',
+                'user': {
+                    'login': 'lead',
+                    'id': 11111,
+                    'type': 'User'
+                },
+                'content': 'rocket',
+                'created_at': '2024-01-15T14:10:00Z'
+            }
+        ]
+
+        mock_get.side_effect = [pr_response, files_response, diff_response, comments_response, reactions_response]
+
         # Setup Claude response
         claude_response = {
             "pr_summary": {
@@ -202,7 +279,8 @@ index 8901234..5678901 100644
                 assert exc_info.value.code == 1
         
         # Verify API calls
-        assert mock_get.call_count == 3
+        # 5 calls: PR data, files, diff, comments, reactions for bot comment
+        assert mock_get.call_count == 5
         assert mock_run.call_count == 2  # 1 version check + 1 unified review
         
         # Verify the audit was run with proper prompt
