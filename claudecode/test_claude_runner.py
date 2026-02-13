@@ -121,6 +121,12 @@ class TestSimpleClaudeRunner:
         """Test successful code review."""
         # Claude Code returns wrapped format with 'result' field
         findings_data = {
+            "pr_summary": {
+                "overview": "Test PR summary",
+                "file_changes": [
+                    {"label": "test.py", "files": ["test.py"], "changes": "Test changes"}
+                ]
+            },
             "findings": [
                 {
                     "file": "test.py",
@@ -128,14 +134,7 @@ class TestSimpleClaudeRunner:
                     "severity": "HIGH",
                     "description": "SQL injection vulnerability"
                 }
-            ],
-            "analysis_summary": {
-                "files_reviewed": 5,
-                "high_severity": 1,
-                "medium_severity": 0,
-                "low_severity": 0,
-                "review_completed": True
-            }
+            ]
         }
         
         audit_result = {
@@ -163,12 +162,15 @@ class TestSimpleClaudeRunner:
         # Verify subprocess call
         mock_run.assert_called_once()
         call_args = mock_run.call_args
-        assert call_args[0][0] == [
-            'claude',
-            '--output-format', 'json',
-            '--model', DEFAULT_CLAUDE_MODEL,
-            '--disallowed-tools', 'Bash(ps:*)'
-        ]
+        cmd = call_args[0][0]
+        assert cmd[0] == 'claude'
+        assert '--output-format' in cmd
+        assert 'json' in cmd
+        assert '--model' in cmd
+        assert DEFAULT_CLAUDE_MODEL in cmd
+        assert '--disallowed-tools' in cmd
+        assert 'Bash(ps:*)' in cmd
+        assert '--json-schema' in cmd
         assert call_args[1]['input'] == 'test prompt'
         assert call_args[1]['cwd'] == Path('/tmp/test')
     
@@ -226,14 +228,11 @@ class TestSimpleClaudeRunner:
         
         success_result = {
             "result": json.dumps({
-                "findings": [{"file": "test.py", "line": 1, "severity": "LOW", "description": "Issue"}],
-                "analysis_summary": {
-                    "files_reviewed": 1,
-                    "high_severity": 0,
-                    "medium_severity": 0,
-                    "low_severity": 1,
-                    "review_completed": True
-                }
+                "pr_summary": {
+                    "overview": "Test",
+                    "file_changes": [{"label": "test.py", "files": ["test.py"], "changes": "Test"}]
+                },
+                "findings": [{"file": "test.py", "line": 1, "severity": "LOW", "description": "Issue"}]
             })
         }
         
@@ -295,12 +294,13 @@ class TestSimpleClaudeRunner:
         # Test with result field containing JSON string
         claude_output = {
             "result": json.dumps({
+                "pr_summary": {"overview": "Test", "file_changes": []},
                 "findings": [
                     {"file": "test.py", "line": 10, "severity": "HIGH"}
                 ]
             })
         }
-        
+
         result = runner._extract_review_findings(claude_output)
         assert len(result['findings']) == 1
         assert result['findings'][0]['file'] == 'test.py'
@@ -308,48 +308,46 @@ class TestSimpleClaudeRunner:
     def test_extract_review_findings_direct_format(self):
         """Test that direct findings format was removed - only wrapped format is supported."""
         runner = SimpleClaudeRunner()
-        
+
         # Direct format (without 'result' wrapper) should return empty
         claude_output = {
             "findings": [
                 {"file": "main.py", "line": 20, "severity": "MEDIUM"}
             ],
-            "analysis_summary": {
-                "files_reviewed": 3,
-                "high_severity": 0,
-                "medium_severity": 1,
-                "low_severity": 0
+            "pr_summary": {
+                "overview": "Test",
+                "file_changes": []
             }
         }
-        
+
         result = runner._extract_review_findings(claude_output)
         # Should return empty structure since direct format is not supported
         assert len(result['findings']) == 0
-        assert result['analysis_summary']['review_completed'] is False
+        assert result['pr_summary'] == {}
     
     def test_extract_review_findings_text_fallback(self):
         """Test that text fallback was removed - only JSON is supported."""
         runner = SimpleClaudeRunner()
-        
+
         # Test with result containing text (not JSON)
         claude_output = {
             "result": "Found SQL injection vulnerability in database.py line 45"
         }
-        
+
         # Should return empty findings since we don't parse text anymore
         result = runner._extract_review_findings(claude_output)
         assert len(result['findings']) == 0
-        assert result['analysis_summary']['review_completed'] is False
+        assert result['pr_summary'] == {}
     
     def test_extract_review_findings_empty(self):
         """Test extraction with no findings."""
         runner = SimpleClaudeRunner()
-        
+
         # Various empty formats
         for output in [None, {}, {"result": ""}, {"other": "data"}]:
             result = runner._extract_review_findings(output)
             assert result['findings'] == []
-            assert result['analysis_summary']['review_completed'] is False
+            assert result['pr_summary'] == {}
     
     def test_create_findings_from_text(self):
         """Test that _create_findings_from_text was removed."""
@@ -378,6 +376,7 @@ class TestClaudeRunnerEdgeCases:
         nested_output = {
             "type": "result",
             "result": json.dumps({
+                "pr_summary": {"overview": "Test", "file_changes": []},
                 "findings": [
                     {"file": "test.py", "line": 1, "severity": "HIGH", "description": "Issue"}
                 ]

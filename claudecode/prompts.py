@@ -185,6 +185,21 @@ REQUIRED OUTPUT FORMAT:
 You MUST output your findings as structured JSON with this exact schema:
 
 {{
+  "pr_summary": {{
+    "overview": "2-4 sentence summary of what this PR changes and why it matters",
+    "file_changes": [
+      {{
+        "label": "src/auth.py",
+        "files": ["src/auth.py"],
+        "changes": "Brief description of changes (~10 words)"
+      }},
+      {{
+        "label": "tests/test_*.py",
+        "files": ["tests/test_auth.py", "tests/test_login.py"],
+        "changes": "Unit tests for authentication"
+      }}
+    ]
+  }},
   "findings": [
     {{
       "file": "path/to/file.py",
@@ -200,15 +215,16 @@ You MUST output your findings as structured JSON with this exact schema:
       "suggestion_end_line": 44,
       "confidence": 0.95
     }}
-  ],
-  "analysis_summary": {{
-    "files_reviewed": 8,
-    "high_severity": 1,
-    "medium_severity": 0,
-    "low_severity": 0,
-    "review_completed": true
-  }}
+  ]
 }}
+
+PR SUMMARY GUIDELINES:
+- overview: 2-4 sentences describing WHAT changed and WHY (purpose/goal)
+- file_changes: One entry per file or group of related files
+  - label: Display name (single file path, or pattern like "tests/*.py" for groups)
+  - files: Array of actual file paths covered by this entry (used for counting)
+  - changes: Brief description (~10 words), focus on purpose not implementation
+  - Group related files when it improves readability (e.g., test files, config files)
 
 SUGGESTION GUIDELINES:
 - Only include `suggestion` if you can provide exact, working replacement code

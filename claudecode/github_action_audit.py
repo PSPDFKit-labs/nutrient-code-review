@@ -26,6 +26,7 @@ from claudecode.constants import (
     SUBPROCESS_TIMEOUT
 )
 from claudecode.logger import get_logger
+from claudecode.review_schema import REVIEW_OUTPUT_SCHEMA
 
 logger = get_logger(__name__)
 
@@ -303,7 +304,8 @@ class SimpleClaudeRunner:
                 'claude',
                 '--output-format', 'json',
                 '--model', DEFAULT_CLAUDE_MODEL,
-                '--disallowed-tools', 'Bash(ps:*)'
+                '--disallowed-tools', 'Bash(ps:*)',
+                '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA)
             ]
             
             # Run Claude Code with retry logic
@@ -365,7 +367,7 @@ class SimpleClaudeRunner:
             return False, f"Claude Code execution error: {str(e)}", {}
     
     def _extract_review_findings(self, claude_output: Any) -> Dict[str, Any]:
-        """Extract review findings from Claude's JSON response."""
+        """Extract review findings and PR summary from Claude's JSON response."""
         if isinstance(claude_output, dict):
             # Only accept Claude Code wrapper with result field
             # Direct format without wrapper is not supported
@@ -374,19 +376,13 @@ class SimpleClaudeRunner:
                 if isinstance(result_text, str):
                     # Try to extract JSON from the result text
                     success, result_json = parse_json_with_fallbacks(result_text, "Claude result text")
-                    if success and result_json and 'findings' in result_json:
+                    if success and result_json and 'findings' in result_json and 'pr_summary' in result_json:
                         return result_json
-        
+
         # Return empty structure if no findings found
         return {
             'findings': [],
-            'analysis_summary': {
-                'files_reviewed': 0,
-                'high_severity': 0,
-                'medium_severity': 0,
-                'low_severity': 0,
-                'review_completed': False,
-            }
+            'pr_summary': {}
         }
 
     def validate_claude_available(self) -> Tuple[bool, str]:
@@ -699,7 +695,7 @@ def main():
             return claude_runner.run_code_review(repo_dir, prompt_text), len(prompt_text)
 
         all_findings = []
-        analysis_summary_from_review = {}
+        pr_summary_from_review = {}
 
         try:
             (success, error_msg, review_results), prompt_len = run_review(include_diff=not use_agentic_mode)
@@ -712,7 +708,7 @@ def main():
             if not success:
                 raise AuditError(f'Code review failed: {error_msg}')
 
-            analysis_summary_from_review = review_results.get('analysis_summary', {})
+            pr_summary_from_review = review_results.get('pr_summary', {})
             for finding in review_results.get('findings', []):
                 if isinstance(finding, dict):
                     # Set review_type based on category
@@ -751,14 +747,26 @@ def main():
             return high, medium, low
 
         high_count, medium_count, low_count = severity_counts(kept_findings)
-        files_reviewed = analysis_summary_from_review.get('files_reviewed', 0)
-        if not isinstance(files_reviewed, int):
-            files_reviewed = 0
+
+        # Calculate files_reviewed from pr_summary.file_changes
+        files_reviewed = 0
+        if isinstance(pr_summary_from_review, dict):
+            file_changes = pr_summary_from_review.get('file_changes', [])
+            if isinstance(file_changes, list):
+                # Count unique files from all 'files' arrays
+                all_files = set()
+                for entry in file_changes:
+                    if isinstance(entry, dict):
+                        files_list = entry.get('files', [])
+                        if isinstance(files_list, list):
+                            all_files.update(files_list)
+                files_reviewed = len(all_files)
 
         # Prepare output
         output = {
             'pr_number': pr_number,
             'repo': repo_name,
+            'pr_summary': pr_summary_from_review,
             'findings': kept_findings,
             'analysis_summary': {
                 'files_reviewed': files_reviewed,

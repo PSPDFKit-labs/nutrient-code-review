@@ -134,6 +134,9 @@ describe('comment-pr-findings.js', () => {
         if (path === 'findings.json') {
           return '[]';
         }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 0, high_severity: 0, medium_severity: 0, low_severity: 0 });
+        }
       });
 
       let reviewDataCaptured = null;
@@ -162,13 +165,15 @@ describe('comment-pr-findings.js', () => {
 
     test('should process findings correctly', async () => {
       const mockFindings = [{
-        path: 'test.py',
-        start: { line: 10 },
-        check_id: 'rules.insecure-pickle-loads-autofix',
-        extra: {
-          message: 'Detected use of pickle deserialization',
-          fix: 'json.loads($DATA)  # Use json.loads() instead of pickle for security'
-        }
+        file: 'test.py',
+        line: 10,
+        title: 'Insecure pickle deserialization',
+        description: 'Detected use of pickle deserialization',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Arbitrary code execution via pickle deserialization',
+        recommendation: 'Use json.loads() instead of pickle for security',
+        confidence: 0.95
       }];
 
       const mockPrFiles = [{
@@ -191,6 +196,9 @@ describe('comment-pr-findings.js', () => {
         }
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
         }
       });
 
@@ -269,6 +277,9 @@ describe('comment-pr-findings.js', () => {
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
         }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 2, high_severity: 0, medium_severity: 1, low_severity: 1 });
+        }
       });
 
       let reviewDataCaptured = null;
@@ -277,6 +288,9 @@ describe('comment-pr-findings.js', () => {
           const endpoint = args[1];
           const method = args[args.indexOf('--method') + 1] || 'GET';
 
+          if (endpoint.includes('/pulls/123/reviews') && method === 'GET') {
+            return { status: 0, stdout: '[]', stderr: '' }; // No existing reviews
+          }
           if (endpoint.includes('/pulls/123/files')) {
             return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
           }
@@ -326,6 +340,9 @@ describe('comment-pr-findings.js', () => {
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
         }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
+        }
       });
 
       let reviewDataCaptured = null;
@@ -356,15 +373,17 @@ describe('comment-pr-findings.js', () => {
 
   describe('Autofix Suggestions', () => {
     test('should generate correct pickle.loads autofix', async () => {
-     
+
       const mockFindings = [{
-        path: 'test.py',
-        start: { line: 1 },
-        check_id: 'rules.insecure-pickle-loads-autofix',
-        extra: {
-          message: 'Insecure pickle loads',
-          fix: 'json.loads($DATA)  # Use json.loads() instead of pickle for security'
-        }
+        file: 'test.py',
+        line: 1,
+        title: 'Insecure pickle loads',
+        description: 'Insecure pickle loads',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Arbitrary code execution',
+        recommendation: 'Use json.loads() instead of pickle for security',
+        confidence: 0.95
       }];
 
       readFileSyncSpy.mockImplementation((path) => {
@@ -375,6 +394,9 @@ describe('comment-pr-findings.js', () => {
         }
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
         }
       });
 
@@ -412,15 +434,17 @@ describe('comment-pr-findings.js', () => {
     });
 
     test('should generate correct yaml.load autofix', async () => {
-     
+
       const mockFindings = [{
-        path: 'config.py',
-        start: { line: 1 },
-        check_id: 'rules.insecure-yaml-loads-no-loader',
-        extra: {
-          message: 'Unsafe YAML deserialization',
-          fix: 'yaml.safe_load($DATA)'
-        }
+        file: 'config.py',
+        line: 1,
+        title: 'Unsafe YAML deserialization',
+        description: 'Unsafe YAML deserialization',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Arbitrary code execution via unsafe YAML deserialization',
+        recommendation: 'Use yaml.safe_load() instead',
+        confidence: 0.95
       }];
 
       readFileSyncSpy.mockImplementation((path) => {
@@ -431,6 +455,9 @@ describe('comment-pr-findings.js', () => {
         }
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
         }
       });
 
@@ -468,15 +495,17 @@ describe('comment-pr-findings.js', () => {
     });
 
     test('should preserve indentation in autofix', async () => {
-     
+
       const mockFindings = [{
-        path: 'test.py',
-        start: { line: 1 },
-        check_id: 'rules.insecure-pickle-loads-autofix',
-        extra: {
-          message: 'Insecure pickle loads',
-          fix: 'json.loads($DATA)  # Use json.loads() instead of pickle for security'
-        }
+        file: 'test.py',
+        line: 1,
+        title: 'Insecure pickle loads',
+        description: 'Insecure pickle loads',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Arbitrary code execution',
+        recommendation: 'Use json.loads() instead of pickle for security',
+        confidence: 0.95
       }];
 
       readFileSyncSpy.mockImplementation((path) => {
@@ -487,6 +516,9 @@ describe('comment-pr-findings.js', () => {
         }
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
         }
       });
 
@@ -556,6 +588,9 @@ describe('comment-pr-findings.js', () => {
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
         }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
+        }
       });
 
       let capturedReviewData;
@@ -612,6 +647,9 @@ describe('comment-pr-findings.js', () => {
         }
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
         }
       });
 
@@ -674,6 +712,9 @@ describe('comment-pr-findings.js', () => {
         }
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
         }
       });
 
@@ -738,6 +779,9 @@ describe('comment-pr-findings.js', () => {
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
         }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
+        }
       });
 
       let capturedReviewData;
@@ -778,7 +822,7 @@ describe('comment-pr-findings.js', () => {
 
   describe('Error Handling', () => {
     test('should handle GitHub API errors gracefully', async () => {
-     
+
       readFileSyncSpy.mockImplementation((path) => {
         if (path.includes('github-event.json')) {
           return JSON.stringify({
@@ -787,17 +831,28 @@ describe('comment-pr-findings.js', () => {
         }
         if (path === 'findings.json') {
           return JSON.stringify([{
-            path: 'test.py',
-            start: { line: 10 },
-            check_id: 'rules.insecure-pickle-loads-autofix',
-            extra: { message: 'Test', fix: 'test' }
+            file: 'test.py',
+            line: 10,
+            title: 'Test finding',
+            description: 'Test finding',
+            severity: 'HIGH',
+            category: 'security',
+            impact: 'Test impact',
+            recommendation: 'Test recommendation',
+            confidence: 0.95
           }]);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
         }
       });
 
       spawnSyncSpy.mockImplementation((cmd, args, options) => {
         if (cmd === 'gh' && args.includes('api')) {
           const endpoint = args[1];
+          if (endpoint.includes('/pulls/123/reviews') && args.includes('GET')) {
+            return { status: 0, stdout: '[]', stderr: '' };
+          }
           if (endpoint.includes('/pulls/123/files')) {
             throw new Error('API rate limit exceeded');
           }
@@ -814,10 +869,15 @@ describe('comment-pr-findings.js', () => {
 
     test('should skip files not in PR diff', async () => {
       const mockFindings = [{
-        path: 'not-in-diff.py',
-        start: { line: 10 },
-        check_id: 'rules.insecure-pickle-loads-autofix',
-        extra: { message: 'Test', fix: 'test' }
+        file: 'not-in-diff.py',
+        line: 10,
+        title: 'Test finding',
+        description: 'Test finding',
+        severity: 'HIGH',
+        category: 'security',
+        impact: 'Test impact',
+        recommendation: 'Test recommendation',
+        confidence: 0.95
       }];
 
       readFileSyncSpy.mockImplementation((path) => {
@@ -828,6 +888,9 @@ describe('comment-pr-findings.js', () => {
         }
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
         }
       });
 
@@ -848,31 +911,123 @@ describe('comment-pr-findings.js', () => {
     });
   });
 
-  describe('Stale Review Handling', () => {
-    test('should only dismiss own bot reviews when DISMISS_STALE_REVIEWS is true', async () => {
-      process.env.DISMISS_STALE_REVIEWS = 'true';
+  describe('PR Summary Formatting', () => {
+    test('should include PR summary in review body when provided', async () => {
+      const mockPrSummary = {
+        overview: 'This PR adds authentication middleware for API endpoints.',
+        file_changes: [
+          { label: 'src/auth.py', files: ['src/auth.py'], changes: 'Added JWT validation' },
+          { label: 'src/config.py', files: ['src/config.py'], changes: 'New auth config options' }
+        ]
+      };
 
-      const mockFindings = [{
-        file: 'test.py',
-        line: 10,
-        description: 'Test issue',
-        severity: 'HIGH',
-        category: 'security'
-      }];
+      const mockAnalysisSummary = {
+        files_reviewed: 2,
+        high_severity: 0,
+        medium_severity: 0,
+        low_severity: 0
+      };
 
-      const mockPrFiles = [{ filename: 'test.py', patch: '@@ -10,1 +10,1 @@' }];
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: { number: 123, head: { sha: 'abc123' } }
+          });
+        }
+        if (path === 'findings.json') {
+          return '[]';
+        }
+        if (path === 'pr-summary.json') {
+          return JSON.stringify(mockPrSummary);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify(mockAnalysisSummary);
+        }
+      });
 
+      let capturedReviewData;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              capturedReviewData = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(capturedReviewData).toBeDefined();
+      expect(capturedReviewData.body).toContain('📋 **PR Summary:**');
+      expect(capturedReviewData.body).toContain('This PR adds authentication middleware');
+      expect(capturedReviewData.body).toContain('<details>');
+      expect(capturedReviewData.body).toContain('<summary>2 files reviewed</summary>');
+      expect(capturedReviewData.body).toContain('| File | Changes |');
+      expect(capturedReviewData.body).toContain('`src/auth.py`');
+      expect(capturedReviewData.body).toContain('Added JWT validation');
+      expect(capturedReviewData.body).toContain('</details>');
+      expect(capturedReviewData.body).toContain('No issues found. Changes look good.');
+    });
+
+    test('should work without PR summary file', async () => {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: { number: 123, head: { sha: 'abc123' } }
+          });
+        }
+        if (path === 'findings.json') {
+          return '[]';
+        }
+        if (path === 'pr-summary.json') {
+          throw new Error('File not found');
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 0, high_severity: 0, medium_severity: 0, low_severity: 0 });
+        }
+      });
+
+      let capturedReviewData;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              capturedReviewData = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(capturedReviewData).toBeDefined();
+      // Should not have PR summary marker
+      expect(capturedReviewData.body).not.toContain('📋 **PR Summary:**');
+      // Should still have findings summary
+      expect(capturedReviewData.body).toContain('No issues found. Changes look good.');
+    });
+
+    test('should recognize PR summary marker in isOwnReview', async () => {
       const mockReviews = [
-        // Our reviews - should be dismissed
-        { id: 101, state: 'CHANGES_REQUESTED', user: { type: 'Bot' }, body: 'Found 3 security issues. Please address the high-severity issues before merging.' },
-        { id: 102, state: 'APPROVED', user: { type: 'Bot' }, body: 'No issues found. Changes look good.' },
-        // Other bot reviews - should NOT be dismissed
-        { id: 103, state: 'APPROVED', user: { type: 'Bot' }, body: 'Dependabot has approved this PR.' },
-        { id: 104, state: 'CHANGES_REQUESTED', user: { type: 'Bot' }, body: 'Renovate: This PR has conflicts.' },
-        // COMMENTED state - should NOT be dismissed
-        { id: 105, state: 'COMMENTED', user: { type: 'Bot' }, body: 'Found 1 security issue.' },
-        // User review - should NOT be dismissed
-        { id: 106, state: 'CHANGES_REQUESTED', user: { type: 'User' }, body: 'Please fix the typo.' }
+        {
+          id: 201,
+          state: 'APPROVED',
+          user: { type: 'Bot' },
+          body: '📋 **PR Summary:**\nThis PR adds auth.\n\n---\n\nNo issues found. Changes look good.'
+        }
       ];
 
       readFileSyncSpy.mockImplementation((path) => {
@@ -882,11 +1037,17 @@ describe('comment-pr-findings.js', () => {
           });
         }
         if (path === 'findings.json') {
-          return JSON.stringify(mockFindings);
+          return '[]';
+        }
+        if (path === 'pr-summary.json') {
+          return JSON.stringify({ overview: 'Updated auth' });
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 0, medium_severity: 0, low_severity: 0 });
         }
       });
 
-      let dismissedReviews = [];
+      let reviewUpdateCalled = false;
       spawnSyncSpy.mockImplementation((cmd, args, options) => {
         if (cmd === 'gh' && args.includes('api')) {
           const endpoint = args[1];
@@ -895,15 +1056,8 @@ describe('comment-pr-findings.js', () => {
           if (endpoint.includes('/pulls/123/reviews') && method === 'GET') {
             return { status: 0, stdout: JSON.stringify(mockReviews), stderr: '' };
           }
-          if (endpoint.includes('/dismissals') && method === 'PUT') {
-            const reviewId = endpoint.match(/reviews\/(\d+)\/dismissals/)[1];
-            dismissedReviews.push(parseInt(reviewId));
-            return { status: 0, stdout: '{}', stderr: '' };
-          }
-          if (endpoint.includes('/pulls/123/files')) {
-            return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
-          }
-          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+          if (endpoint.match(/\/pulls\/123\/reviews\/\d+$/) && method === 'PUT') {
+            reviewUpdateCalled = true;
             return { status: 0, stdout: '{}', stderr: '' };
           }
           return { status: 0, stdout: '{}', stderr: '' };
@@ -913,36 +1067,80 @@ describe('comment-pr-findings.js', () => {
 
       await import('./comment-pr-findings.js');
 
-      // Only our reviews should be dismissed
-      expect(dismissedReviews).toContain(101);
-      expect(dismissedReviews).toContain(102);
-      // Other bot reviews should NOT be dismissed
-      expect(dismissedReviews).not.toContain(103); // Dependabot
-      expect(dismissedReviews).not.toContain(104); // Renovate
-      expect(dismissedReviews).not.toContain(105); // COMMENTED state
-      expect(dismissedReviews).not.toContain(106); // User review
-      expect(consoleLogSpy).toHaveBeenCalledWith('Dismissed stale review 101');
-      expect(consoleLogSpy).toHaveBeenCalledWith('Dismissed stale review 102');
+      // Should update existing review in place since state is same (APPROVED)
+      expect(reviewUpdateCalled).toBe(true);
+    });
+  });
+
+  describe('Review Update Handling', () => {
+    test('should update existing review in place when state is unchanged and no inline comments', async () => {
+      // Existing APPROVED review, new findings also result in APPROVED (no HIGH severity)
+      const mockReviews = [
+        { id: 101, state: 'APPROVED', user: { type: 'Bot' }, body: 'No issues found. Changes look good.' }
+      ];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: { number: 123, head: { sha: 'abc123' } }
+          });
+        }
+        if (path === 'findings.json') {
+          return '[]'; // No findings = APPROVED state
+        }
+        if (path === 'pr-summary.json') {
+          return JSON.stringify({ overview: 'Updated summary' });
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 0, medium_severity: 0, low_severity: 0 });
+        }
+      });
+
+      let reviewUpdated = false;
+      let reviewCreated = false;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/reviews') && method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(mockReviews), stderr: '' };
+          }
+          if (endpoint.match(/\/pulls\/123\/reviews\/\d+$/) && method === 'PUT') {
+            reviewUpdated = true;
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            reviewCreated = true;
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewUpdated).toBe(true);
+      expect(reviewCreated).toBe(false);
+      expect(consoleLogSpy).toHaveBeenCalledWith('Updated existing review in place (state: APPROVED)');
     });
 
-    test('should skip posting when existing comments found and DISMISS_STALE_REVIEWS is false', async () => {
-      process.env.DISMISS_STALE_REVIEWS = 'false';
+    test('should dismiss and create new review when state changes', async () => {
+      // Existing APPROVED review, but new findings have HIGH severity = CHANGES_REQUESTED
+      const mockReviews = [
+        { id: 101, state: 'APPROVED', user: { type: 'Bot' }, body: 'No issues found. Changes look good.' }
+      ];
 
       const mockFindings = [{
         file: 'test.py',
         line: 10,
-        description: 'Test issue',
+        description: 'Critical issue',
         severity: 'HIGH',
         category: 'security'
       }];
 
       const mockPrFiles = [{ filename: 'test.py', patch: '@@ -10,1 +10,1 @@' }];
-
-      const mockExistingComments = [{
-        id: 1,
-        user: { type: 'Bot' },
-        body: '🤖 **Code Review Finding: Test**'
-      }];
 
       readFileSyncSpy.mockImplementation((path) => {
         if (path.includes('github-event.json')) {
@@ -953,18 +1151,34 @@ describe('comment-pr-findings.js', () => {
         if (path === 'findings.json') {
           return JSON.stringify(mockFindings);
         }
+        if (path === 'pr-summary.json') {
+          throw new Error('File not found');
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
+        }
       });
 
+      let reviewDismissed = false;
+      let reviewCreated = false;
       spawnSyncSpy.mockImplementation((cmd, args, options) => {
         if (cmd === 'gh' && args.includes('api')) {
           const endpoint = args[1];
           const method = args[args.indexOf('--method') + 1] || 'GET';
 
+          if (endpoint.includes('/pulls/123/reviews') && method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(mockReviews), stderr: '' };
+          }
+          if (endpoint.includes('/dismissals') && method === 'PUT') {
+            reviewDismissed = true;
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
           if (endpoint.includes('/pulls/123/files')) {
             return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
           }
-          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
-            return { status: 0, stdout: JSON.stringify(mockExistingComments), stderr: '' };
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            reviewCreated = true;
+            return { status: 0, stdout: '{}', stderr: '' };
           }
           return { status: 0, stdout: '{}', stderr: '' };
         }
@@ -973,7 +1187,50 @@ describe('comment-pr-findings.js', () => {
 
       await import('./comment-pr-findings.js');
 
-      expect(consoleLogSpy).toHaveBeenCalledWith('Found 1 existing security comments, skipping to avoid duplicates');
+      expect(reviewDismissed).toBe(true);
+      expect(reviewCreated).toBe(true);
+      expect(consoleLogSpy).toHaveBeenCalledWith('Dismissed review 101: Re-reviewing: state changed from APPROVED to CHANGES_REQUESTED');
+    });
+
+    test('should create new review when no existing review found', async () => {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: { number: 123, head: { sha: 'abc123' } }
+          });
+        }
+        if (path === 'findings.json') {
+          return '[]';
+        }
+        if (path === 'pr-summary.json') {
+          throw new Error('File not found');
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
+        }
+      });
+
+      let reviewCreated = false;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/reviews') && method === 'GET') {
+            return { status: 0, stdout: '[]', stderr: '' }; // No existing reviews
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            reviewCreated = true;
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewCreated).toBe(true);
     });
   });
 });

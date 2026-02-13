@@ -173,3 +173,23 @@ diff --git a/emoji.py b/emoji.py
 
         assert "Check transaction consistency." in prompt
         assert "Check GraphQL authz." in prompt
+
+    def test_get_unified_review_prompt_includes_pr_summary_schema(self):
+        """Test that prompt includes pr_summary in JSON schema."""
+        pr_data = _sample_pr_data()
+        prompt = get_unified_review_prompt(pr_data, pr_diff="diff")
+
+        assert '"pr_summary"' in prompt
+        assert '"overview"' in prompt
+        assert '"file_changes"' in prompt
+        assert '"label"' in prompt
+        assert '"files"' in prompt
+
+    def test_get_unified_review_prompt_includes_summary_guidelines(self):
+        """Test that prompt includes PR summary guidelines."""
+        pr_data = _sample_pr_data()
+        prompt = get_unified_review_prompt(pr_data, pr_diff="diff")
+
+        assert "PR SUMMARY GUIDELINES:" in prompt
+        assert "2-4 sentences" in prompt
+        assert "~10 words" in prompt

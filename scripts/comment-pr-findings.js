@@ -7,6 +7,9 @@
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 
+// PR Summary marker for identifying our summary sections
+const PR_SUMMARY_MARKER = '📋 **PR Summary:**';
+
 // Parse GitHub context from environment
 const context = {
   repo: {
@@ -94,6 +97,7 @@ function isOwnReview(review) {
 
   // Check for our review summary patterns
   const ownPatterns = [
+    PR_SUMMARY_MARKER,
     'No issues found. Changes look good.',
     /^Found \d+ .+ issues?\./,
     'Please address the high-severity issues before merging.',
@@ -112,41 +116,84 @@ function isOwnReview(review) {
   return false;
 }
 
-// Helper function to dismiss stale bot reviews from this action only
-function dismissStaleReviews() {
+// Find an existing review posted by this action
+function findExistingReview() {
   try {
     const reviews = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`);
 
     if (!reviews || !Array.isArray(reviews)) {
-      return 0;
+      return null;
     }
 
-    let dismissedCount = 0;
     for (const review of reviews) {
       const isDismissible = review.state === 'APPROVED' || review.state === 'CHANGES_REQUESTED';
       const isBot = review.user && review.user.type === 'Bot';
       const isOwn = isOwnReview(review);
 
       if (isBot && isDismissible && isOwn) {
-        try {
-          ghApi(
-            `/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews/${review.id}/dismissals`,
-            'PUT',
-            { message: 'Dismissed: New review posted for updated changes.' }
-          );
-          console.log(`Dismissed stale review ${review.id}`);
-          dismissedCount++;
-        } catch (dismissError) {
-          console.error(`Failed to dismiss review ${review.id}:`, dismissError.message);
-        }
+        return review;
       }
     }
 
-    return dismissedCount;
+    return null;
   } catch (error) {
-    console.error('Failed to get reviews for dismissal:', error.message);
-    return 0;
+    console.error('Failed to find existing review:', error.message);
+    return null;
   }
+}
+
+// Update an existing review's body (cannot change state via update)
+function updateReviewBody(reviewId, newBody) {
+  try {
+    ghApi(
+      `/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews/${reviewId}`,
+      'PUT',
+      { body: newBody }
+    );
+    console.log(`Updated existing review ${reviewId}`);
+    return true;
+  } catch (error) {
+    console.error(`Failed to update review ${reviewId}:`, error.message);
+    return false;
+  }
+}
+
+// Dismiss a specific review
+function dismissReview(reviewId, message) {
+  try {
+    ghApi(
+      `/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews/${reviewId}/dismissals`,
+      'PUT',
+      { message }
+    );
+    console.log(`Dismissed review ${reviewId}: ${message}`);
+    return true;
+  } catch (error) {
+    console.error(`Failed to dismiss review ${reviewId}:`, error.message);
+    return false;
+  }
+}
+
+// Format PR summary object into markdown
+function formatPrSummary(prSummary, filesReviewed) {
+  if (!prSummary || !prSummary.overview) return '';
+
+  let result = `${PR_SUMMARY_MARKER}\n${prSummary.overview}\n\n`;
+
+  if (prSummary.file_changes && prSummary.file_changes.length > 0) {
+    // Build collapsible table with files_reviewed count
+    const fileCount = filesReviewed || 0;
+    result += `<details>\n<summary>${fileCount} file${fileCount === 1 ? '' : 's'} reviewed</summary>\n\n`;
+    result += '| File | Changes |\n|------|---------|' + '\n';
+    for (const fc of prSummary.file_changes) {
+      // Use label for display (supports grouped files like "tests/*.py")
+      const label = fc.label || (fc.files && fc.files[0]) || 'unknown';
+      result += `| \`${label}\` | ${fc.changes} |\n`;
+    }
+    result += '\n</details>\n';
+  }
+
+  return result;
 }
 
 async function run() {
@@ -161,33 +208,44 @@ async function run() {
       return;
     }
 
-    function normalizeSeverity(value) {
-      return String(value || '').toUpperCase();
+    // Read the PR summary
+    let prSummary = null;
+    try {
+      const summaryData = fs.readFileSync('pr-summary.json', 'utf8');
+      prSummary = JSON.parse(summaryData);
+    } catch (e) {
+      console.log('Could not read PR summary file, continuing without it');
     }
 
-    function countSeverities(findings) {
-      let high = 0;
-      let medium = 0;
-      let low = 0;
+    // Read the analysis summary (required - contains files_reviewed and severity counts)
+    let analysisSummary;
+    try {
+      const analysisData = fs.readFileSync('analysis-summary.json', 'utf8');
+      analysisSummary = JSON.parse(analysisData);
+    } catch (e) {
+      console.log('Could not read analysis summary file');
+      return;
+    }
 
-      for (const finding of findings) {
-        const severity = normalizeSeverity(finding.severity || 'HIGH');
-        if (severity === 'HIGH') {
-          high += 1;
-        } else if (severity === 'MEDIUM') {
-          medium += 1;
-        } else if (severity === 'LOW') {
-          low += 1;
-        }
+    function buildReviewSummary(findings, prSummaryObj, analysisSummaryObj) {
+      let body = '';
+
+      // Add PR summary section if available
+      const filesReviewed = analysisSummaryObj.files_reviewed || 0;
+      const summaryText = formatPrSummary(prSummaryObj, filesReviewed);
+      if (summaryText) {
+        body += summaryText + '\n---\n\n';
       }
 
-      return { high, medium, low };
-    }
-
-    function buildReviewSummary(findings) {
       const total = findings.length;
-      const categories = {};
 
+      if (total === 0) {
+        body += 'No issues found. Changes look good.';
+        return body;
+      }
+
+      // Build concise category summary
+      const categories = {};
       for (const finding of findings) {
         const category = finding.category || 'other';
         if (!categories[category]) {
@@ -196,13 +254,6 @@ async function run() {
         categories[category].push(finding);
       }
 
-      const { high, medium, low } = countSeverities(findings);
-
-      if (total === 0) {
-        return 'No issues found. Changes look good.';
-      }
-
-      // Build concise category summary
       const categoryNames = Object.keys(categories).map(c => c.toLowerCase());
       let issueTypes;
       if (categoryNames.length === 1) {
@@ -214,24 +265,27 @@ async function run() {
         issueTypes = categoryNames.join(', ') + ', and ' + last;
       }
 
-      // Build the summary
-      let summary = `Found ${total} ${issueTypes} issue${total === 1 ? '' : 's'}. `;
+      // Build the findings summary
+      body += `Found ${total} ${issueTypes} issue${total === 1 ? '' : 's'}. `;
 
-      // Recommendation
+      // Recommendation based on severity from analysis summary
+      const high = analysisSummaryObj.high_severity || 0;
+      const medium = analysisSummaryObj.medium_severity || 0;
+
       if (high > 0) {
-        summary += 'Please address the high-severity issues before merging.';
+        body += 'Please address the high-severity issues before merging.';
       } else if (medium > 0) {
-        summary += 'Consider addressing the suggestions in the comments.';
+        body += 'Consider addressing the suggestions in the comments.';
       } else {
-        summary += 'Minor suggestions noted in comments.';
+        body += 'Minor suggestions noted in comments.';
       }
 
-      return summary;
+      return body;
     }
 
-    const { high: highSeverityCount } = countSeverities(newFindings);
+    const highSeverityCount = analysisSummary.high_severity || 0;
     const reviewEvent = highSeverityCount > 0 ? 'REQUEST_CHANGES' : 'APPROVE';
-    const reviewBody = buildReviewSummary(newFindings);
+    const reviewBody = buildReviewSummary(newFindings, prSummary, analysisSummary);
 
     // Prepare review comments
     const reviewComments = [];
@@ -256,9 +310,9 @@ async function run() {
 
       // Process findings synchronously (gh cli doesn't support async well)
       for (const finding of newFindings) {
-        const file = finding.file || finding.path;
-        const line = finding.line || (finding.start && finding.start.line) || 1;
-        const message = finding.description || (finding.extra && finding.extra.message) || 'Issue detected';
+        const file = finding.file;
+        const line = finding.line || 1;
+        const message = finding.description || 'Issue detected';
         const title = finding.title || message;
         const severity = finding.severity || 'HIGH';
         const category = finding.category || 'review_issue';
@@ -274,24 +328,19 @@ async function run() {
         commentBody += `**Severity:** ${severity}\n`;
         commentBody += `**Category:** ${category}\n`;
 
-        const extraMetadata = (finding.extra && finding.extra.metadata) || {};
-
-        // Add impact/exploit scenario if available
-        if (finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario) {
-          const impact = finding.impact || finding.exploit_scenario || extraMetadata.impact || extraMetadata.exploit_scenario;
-          commentBody += `\n**Impact:** ${impact}\n`;
+        // Add impact if available
+        if (finding.impact) {
+          commentBody += `\n**Impact:** ${finding.impact}\n`;
         }
 
         // Add recommendation if available
-        const recommendation = finding.recommendation || extraMetadata.recommendation;
-        if (recommendation) {
-          commentBody += `\n**Recommendation:** ${recommendation}\n`;
+        if (finding.recommendation) {
+          commentBody += `\n**Recommendation:** ${finding.recommendation}\n`;
         }
 
         // Add GitHub suggestion block if a code suggestion is available
-        const suggestion = finding.suggestion || extraMetadata.suggestion;
-        if (suggestion) {
-          commentBody += `\n\`\`\`suggestion\n${suggestion}\n\`\`\`\n`;
+        if (finding.suggestion) {
+          commentBody += `\n\`\`\`suggestion\n${finding.suggestion}\n\`\`\`\n`;
         }
 
         // Prepare the review comment
@@ -303,10 +352,10 @@ async function run() {
         };
 
         // Handle multi-line suggestions by adding start_line
-        const suggestionStartLine = finding.suggestion_start_line || extraMetadata.suggestion_start_line;
-        const suggestionEndLine = finding.suggestion_end_line || extraMetadata.suggestion_end_line;
+        const suggestionStartLine = finding.suggestion_start_line;
+        const suggestionEndLine = finding.suggestion_end_line;
 
-        if (suggestion && suggestionStartLine && suggestionEndLine && suggestionStartLine !== suggestionEndLine) {
+        if (finding.suggestion && suggestionStartLine && suggestionEndLine && suggestionStartLine !== suggestionEndLine) {
           // Multi-line suggestion: start_line is the first line, line is the last line
           reviewComment.start_line = suggestionStartLine;
           reviewComment.line = suggestionEndLine;
@@ -321,31 +370,28 @@ async function run() {
       console.log('No inline comments to add; posting summary review only');
     }
 
-    // Handle existing reviews based on configuration
-    const dismissStaleReviewsEnabled = process.env.DISMISS_STALE_REVIEWS === 'true';
+    // Handle existing reviews - update in place if state unchanged, otherwise dismiss and recreate
+    const existingReview = findExistingReview();
+    const newState = highSeverityCount > 0 ? 'CHANGES_REQUESTED' : 'APPROVED';
 
-    if (dismissStaleReviewsEnabled) {
-      const dismissedCount = dismissStaleReviews();
-      if (dismissedCount > 0) {
-        console.log(`Dismissed ${dismissedCount} stale review(s)`);
-      }
-    } else if (reviewComments.length > 0) {
-      // Legacy behavior: skip if existing comments found
-      const comments = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/comments`);
+    if (existingReview) {
+      const existingState = existingReview.state;
 
-      const existingSecurityComments = comments.filter(comment =>
-        comment.user.type === 'Bot' &&
-        comment.body && (
-          comment.body.includes('🤖 **Security Issue:') ||
-          comment.body.includes('🤖 **Code Review Finding:')
-        )
-      );
-
-      if (existingSecurityComments.length > 0) {
-        console.log(`Found ${existingSecurityComments.length} existing security comments, skipping to avoid duplicates`);
-        return;
+      if (existingState === newState && reviewComments.length === 0) {
+        // Same state and no new inline comments - update body in place
+        const updated = updateReviewBody(existingReview.id, reviewBody);
+        if (updated) {
+          console.log(`Updated existing review in place (state: ${newState})`);
+          return;
+        }
+        // If update failed, fall through to create new review
+        console.log('Failed to update existing review, will create new one');
+      } else {
+        // State changed or has inline comments - dismiss old review and create new
+        dismissReview(existingReview.id, `Re-reviewing: state changed from ${existingState} to ${newState}`);
       }
     }
+    // If no existing review found, just create a new one (fall through to review creation below)
 
     try {
       // Create a review with all the comments
@@ -357,7 +403,7 @@ async function run() {
       if (reviewComments.length > 0) {
         reviewData.comments = reviewComments;
       }
-      
+
       const reviewResponse = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`, 'POST', reviewData);
 
       console.log(`Created review with ${reviewComments.length} inline comments`);

@@ -125,6 +125,12 @@ index 8901234..5678901 100644
         
         # Setup Claude response
         claude_response = {
+            "pr_summary": {
+                "overview": "This PR adds OAuth2 authentication",
+                "file_changes": [
+                    {"label": "src/auth/*.py", "files": ["src/auth/oauth2.py", "src/auth/config.py"], "changes": "OAuth2 authentication implementation"}
+                ]
+            },
             "findings": [
                 {
                     "file": "src/auth/oauth2.py",
@@ -156,14 +162,7 @@ index 8901234..5678901 100644
                     "recommendation": "Consider using secure storage mechanisms for sensitive data",
                     "confidence": 0.8
                 }
-            ],
-            "analysis_summary": {
-                "files_reviewed": 2,
-                "high_severity": 2,
-                "medium_severity": 1,
-                "low_severity": 0,
-                "review_completed": True
-            }
+            ]
         }
         
         # Mock Claude CLI

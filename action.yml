@@ -54,11 +54,6 @@ inputs:
     required: false
     default: ''
 
-  dismiss-stale-reviews:
-    description: 'Dismiss previous bot reviews when posting a new review (useful for follow-up commits). If false, skips posting when existing review comments are found.'
-    required: false
-    default: 'true'
-
   skip-draft-prs:
     description: 'Skip code review on draft pull requests'
     required: false
@@ -459,8 +454,10 @@ runs:
               echo "findings_count=$CLAUDECODE_FINDINGS_COUNT" >> $GITHUB_OUTPUT
               echo "ClaudeCode found $CLAUDECODE_FINDINGS_COUNT review issues"
               
-              # Also create findings.json for PR comment script
+              # Also create findings.json and pr-summary.json for PR comment script
               jq '.findings // []' claudecode/claudecode-results.json > findings.json || echo '[]' > findings.json
+              jq '.pr_summary // {}' claudecode/claudecode-results.json > pr-summary.json || echo '{}' > pr-summary.json
+              jq '.analysis_summary // {}' claudecode/claudecode-results.json > analysis-summary.json || echo '{}' > analysis-summary.json
             fi
           fi
         else
@@ -476,6 +473,12 @@ runs:
         # This ensures artifact upload and PR commenting can find them
         if [ -f findings.json ]; then
           cp findings.json ${{ github.workspace }}/findings.json || true
+        fi
+        if [ -f pr-summary.json ]; then
+          cp pr-summary.json ${{ github.workspace }}/pr-summary.json || true
+        fi
+        if [ -f analysis-summary.json ]; then
+          cp analysis-summary.json ${{ github.workspace }}/analysis-summary.json || true
         fi
         if [ -f claudecode/claudecode-results.json ]; then
           cp claudecode/claudecode-results.json ${{ github.workspace }}/claudecode-results.json || true
@@ -506,7 +509,6 @@ runs:
         GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
         CLAUDECODE_FINDINGS: ${{ steps.claudecode-scan.outputs.findings_count }}
         SILENCE_CLAUDECODE_COMMENTS: ${{ steps.claudecode-check.outputs.silence_claudecode_comments }}
-        DISMISS_STALE_REVIEWS: ${{ inputs.dismiss-stale-reviews }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
         node "$ACTION_PATH/scripts/comment-pr-findings.js"

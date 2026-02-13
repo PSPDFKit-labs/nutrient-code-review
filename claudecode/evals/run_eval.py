@@ -128,22 +128,43 @@ def main():
     print(f"Runtime: {result.runtime_seconds:.1f} seconds")
     print(f"Issues detected: {result.detected_issues}")
     print(f"Findings count: {result.findings_count}")
-    
+
     if result.error_message:
         print(f"Error: {result.error_message}")
-    
+
+    # Display PR summary
+    if result.pr_summary:
+        print("\n" + "-" * 60)
+        print("PR SUMMARY:")
+        if 'overview' in result.pr_summary:
+            print(f"  {result.pr_summary['overview']}")
+        if 'file_changes' in result.pr_summary:
+            print(f"\n  Files summaries ({len(result.pr_summary['file_changes'])}):")
+            for fc in result.pr_summary['file_changes']:
+                print(f"    - {fc.get('label', 'unknown')}: {fc.get('changes', 'N/A')}")
+
+    # Display analysis summary
+    if result.analysis_summary:
+        print("\n" + "-" * 60)
+        print("ANALYSIS SUMMARY:")
+        print(f"  Files reviewed: {result.analysis_summary.get('files_reviewed', 0)}")
+        print(f"  High severity: {result.analysis_summary.get('high_severity', 0)}")
+        print(f"  Medium severity: {result.analysis_summary.get('medium_severity', 0)}")
+        print(f"  Low severity: {result.analysis_summary.get('low_severity', 0)}")
+        print(f"  Review completed: {result.analysis_summary.get('review_completed', False)}")
+
     if result.full_findings:
         print("\nFindings:")
         for finding in result.full_findings:
             print(f"  - [{finding.get('severity', 'UNKNOWN')}] {finding.get('file', 'unknown')}:{finding.get('line', '?')}")
             if 'category' in finding:
                 print(f"    Category: {finding['category']}")
+            if 'title' in finding:
+                print(f"    Title: {finding['title']}")
             if 'description' in finding:
                 print(f"    Description: {finding['description']}")
             if 'impact' in finding:
                 print(f"    Impact: {finding['impact']}")
-            elif 'exploit_scenario' in finding:
-                print(f"    Impact: {finding['exploit_scenario']}")
             if 'recommendation' in finding:
                 print(f"    Fix: {finding['recommendation']}")
             if 'confidence' in finding:

@@ -423,6 +423,100 @@ class TestBuiltinExclusions:
             assert client._is_excluded('my_vendor/lib.js')
 
 
+class TestExtractReviewFindings:
+    """Test the _extract_review_findings method."""
+
+    def test_extract_findings_with_pr_summary(self):
+        """Test that pr_summary is extracted from Claude output."""
+        import json
+        from claudecode.github_action_audit import SimpleClaudeRunner
+
+        runner = SimpleClaudeRunner()
+
+        claude_output = {
+            'result': json.dumps({
+                'findings': [
+                    {'file': 'test.py', 'line': 1, 'severity': 'HIGH', 'description': 'Test finding'}
+                ],
+                'pr_summary': {
+                    'overview': 'This PR adds authentication middleware.',
+                    'file_changes': [
+                        {'label': 'src/auth.py', 'files': ['src/auth.py'], 'changes': 'Added JWT validation'}
+                    ]
+                }
+            })
+        }
+
+        result = runner._extract_review_findings(claude_output)
+
+        assert 'pr_summary' in result
+        assert result['pr_summary']['overview'] == 'This PR adds authentication middleware.'
+        assert len(result['pr_summary']['file_changes']) == 1
+        assert result['pr_summary']['file_changes'][0]['files'] == ['src/auth.py']
+        assert len(result['findings']) == 1
+
+    def test_extract_findings_without_pr_summary(self):
+        """Test that missing pr_summary defaults to empty dict."""
+        import json
+        from claudecode.github_action_audit import SimpleClaudeRunner
+
+        runner = SimpleClaudeRunner()
+
+        claude_output = {
+            'result': json.dumps({
+                'findings': []
+            })
+        }
+
+        result = runner._extract_review_findings(claude_output)
+
+        assert 'pr_summary' in result
+        assert result['pr_summary'] == {}
+
+    def test_extract_findings_empty_result(self):
+        """Test extraction with invalid/empty Claude output."""
+        from claudecode.github_action_audit import SimpleClaudeRunner
+
+        runner = SimpleClaudeRunner()
+
+        result = runner._extract_review_findings({})
+
+        assert 'pr_summary' in result
+        assert result['pr_summary'] == {}
+        assert result['findings'] == []
+
+    def test_extract_findings_with_grouped_files(self):
+        """Test that grouped file_changes are handled correctly."""
+        import json
+        from claudecode.github_action_audit import SimpleClaudeRunner
+
+        runner = SimpleClaudeRunner()
+
+        claude_output = {
+            'result': json.dumps({
+                'findings': [],
+                'pr_summary': {
+                    'overview': 'Test updates.',
+                    'file_changes': [
+                        {
+                            'label': 'tests/test_*.py',
+                            'files': ['tests/test_auth.py', 'tests/test_login.py', 'tests/test_session.py'],
+                            'changes': 'Unit tests for auth module'
+                        }
+                    ]
+                }
+            })
+        }
+
+        result = runner._extract_review_findings(claude_output)
+
+        assert 'pr_summary' in result
+        file_changes = result['pr_summary']['file_changes']
+        assert len(file_changes) == 1
+        assert file_changes[0]['label'] == 'tests/test_*.py'
+        assert len(file_changes[0]['files']) == 3
+
+
 class TestDiffSizeLimits:
     """Test diff size limit functionality."""
 
