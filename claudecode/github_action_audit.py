@@ -24,7 +24,9 @@ from claudecode.constants import (
     DEFAULT_CLAUDE_MODEL,
     EXIT_SUCCESS,
     EXIT_GENERAL_ERROR,
-    SUBPROCESS_TIMEOUT
+    SUBPROCESS_TIMEOUT,
+    DEFAULT_MAX_DIFF_CHARS,
+    CHARS_PER_LINE_ESTIMATE
 )
 from claudecode.logger import get_logger
 from claudecode.review_schema import REVIEW_OUTPUT_SCHEMA
@@ -126,82 +128,240 @@ class GitHubActionClient:
             print(f"[Debug] User excluded directories: {user_excluded_dirs}", file=sys.stderr)
         print(f"[Debug] Total excluded directories: {self.excluded_dirs}", file=sys.stderr)
     
-    def get_pr_data(self, repo_name: str, pr_number: int) -> Dict[str, Any]:
-        """Get PR metadata and files from GitHub API.
-        
+    def get_pr_data(self, repo_name: str, pr_number: int, max_diff_chars: int = 400000) -> Dict[str, Any]:
+        """Get PR metadata and construct diff in one pass with early termination.
+
+        Fetches files page-by-page while building the diff. Stops fetching when
+        max_diff_chars is reached, saving API calls for large PRs.
+
+        When max_diff_chars == 0 (agentic mode), only fetches PR metadata without files,
+        as Claude will use git commands to explore changes.
+
         Args:
             repo_name: Repository name in format "owner/repo"
             pr_number: Pull request number
-            
+            max_diff_chars: Maximum diff characters (0 = agentic mode, don't fetch files)
+
         Returns:
-            Dictionary containing PR data
+            Dictionary containing:
+            - PR metadata (number, title, body, user, etc.)
+            - files: List of files fetched (empty if agentic mode)
+            - pr_diff: Constructed diff text (empty if agentic mode)
+            - is_truncated: Whether we stopped fetching due to max_chars
+            - diff_stats: {files_included, total_files from PR metadata}
         """
-        # Get PR metadata
+        # Get PR metadata first (contains total changed_files count)
         pr_url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}"
         response = requests.get(pr_url, headers=self.headers)
         response.raise_for_status()
-        pr_data = response.json()
-        
-        # Get PR files with pagination support
-        files_url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}/files?per_page=100"
-        response = requests.get(files_url, headers=self.headers)
-        response.raise_for_status()
-        files_data = response.json()
-        
+        pr_metadata = response.json()
+
+        # Extract total files from PR metadata
+        total_files_in_pr = pr_metadata['changed_files']
+
+        # Agentic mode: Don't fetch files, Claude uses git commands
+        if max_diff_chars == 0:
+            logger.info(f"Agentic mode enabled (MAX_DIFF_CHARS=0): Skipping file fetch for PR #{pr_number} ({total_files_in_pr} files in PR)")
+            return {
+                'number': pr_metadata['number'],
+                'title': pr_metadata['title'],
+                'body': pr_metadata.get('body', ''),
+                'user': pr_metadata['user']['login'],
+                'created_at': pr_metadata['created_at'],
+                'updated_at': pr_metadata['updated_at'],
+                'state': pr_metadata['state'],
+                'head': {
+                    'ref': pr_metadata['head']['ref'],
+                    'sha': pr_metadata['head']['sha'],
+                    'repo': {
+                        'full_name': pr_metadata['head']['repo']['full_name'] if pr_metadata['head']['repo'] else repo_name
+                    }
+                },
+                'base': {
+                    'ref': pr_metadata['base']['ref'],
+                    'sha': pr_metadata['base']['sha']
+                },
+                'files': [],
+                'additions': pr_metadata['additions'],
+                'deletions': pr_metadata['deletions'],
+                'changed_files': pr_metadata['changed_files'],
+                # Diff data (empty for agentic mode)
+                'pr_diff': '',
+                'is_truncated': False,
+                'diff_stats': {'files_included': 0, 'total_files': total_files_in_pr, 'included_file_list': []}
+            }
+
+        # Setup for incremental diff construction
+        diff_sections = []
+        current_chars = 0
+        files_with_patches = 0
+        is_truncated = False
+        fetched_files = []
+        included_files = []  # Track which files made it into the diff
+
+        # Fetch files page-by-page, building diff incrementally
+        page = 1
+        per_page = 100
+
+        while True:
+            files_url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}/files"
+            params = {'per_page': per_page, 'page': page}
+
+            try:
+                response = requests.get(files_url, headers=self.headers, params=params)
+                response.raise_for_status()
+                files_data = response.json()
+
+                if not files_data:
+                    break
+
+                # Process each file in this page
+                for file_data in files_data:
+                    filename = file_data['filename']
+
+                    # Skip excluded files
+                    if self._is_excluded(filename):
+                        continue
+
+                    # Store file metadata
+                    file_obj = {
+                        'filename': filename,
+                        'status': file_data['status'],
+                        'additions': file_data['additions'],
+                        'deletions': file_data['deletions'],
+                        'changes': file_data['changes'],
+                        'patch': file_data.get('patch', ''),
+                        'previous_filename': file_data.get('previous_filename')
+                    }
+                    fetched_files.append(file_obj)
+
+                    # Try to add to diff (only files with patches)
+                    patch = file_data.get('patch', '')
+                    if not patch:
+                        logger.debug(f"Skipping {filename} (no patch - binary/rename-only)")
+                        continue  # Skip files without patches (binaries, etc.)
+
+                    # Build diff section
+                    diff_section = self._format_file_diff(file_obj)
+                    section_chars = len(diff_section)
+
+                    # Check if adding this would exceed limit
+                    if current_chars + section_chars > max_diff_chars:
+                        is_truncated = True
+                        # Early termination - stop fetching more files
+                        logger.info(f"Diff truncated at {files_with_patches} files ({current_chars} chars, would exceed max {max_diff_chars})")
+                        break
+
+                    # Add to diff
+                    diff_sections.append(diff_section)
+                    current_chars += section_chars
+                    files_with_patches += 1
+                    included_files.append(filename)
+                    logger.debug(f"Added {filename} to diff ({section_chars} chars, total: {current_chars}/{max_diff_chars})")
+
+                # If truncated, stop pagination
+                if is_truncated:
+                    break
+
+                # GitHub API supports up to 3000 files
+                # Stop if no more pages
+                if len(files_data) < per_page:
+                    break
+
+                page += 1
+
+            except requests.RequestException as e:
+                logger.warning(f"Failed to fetch files page {page}: {e}")
+                # Continue with files we have so far rather than failing completely
+                break
+
+        logger.info(f"Fetched {len(fetched_files)} files for PR #{pr_number} (total in PR: {total_files_in_pr})")
+
+        pr_diff = '\n'.join(diff_sections)
+        diff_char_count = len(pr_diff)
+
+        diff_stats = {
+            'files_included': files_with_patches,
+            'total_files': total_files_in_pr,  # From PR metadata, not fetched count
+            'included_file_list': included_files  # Actual list of files in the diff
+        }
+
+        # Log diff construction summary
+        skipped_files = len(fetched_files) - files_with_patches
+        logger.info(f"Diff construction complete: {files_with_patches} files in diff ({diff_char_count} chars), "
+                   f"{skipped_files} files skipped (no patch), {total_files_in_pr - len(fetched_files)} files not fetched")
+
         return {
-            'number': pr_data['number'],
-            'title': pr_data['title'],
-            'body': pr_data.get('body', ''),
-            'user': pr_data['user']['login'],
-            'created_at': pr_data['created_at'],
-            'updated_at': pr_data['updated_at'],
-            'state': pr_data['state'],
+            'number': pr_metadata['number'],
+            'title': pr_metadata['title'],
+            'body': pr_metadata.get('body', ''),
+            'user': pr_metadata['user']['login'],
+            'created_at': pr_metadata['created_at'],
+            'updated_at': pr_metadata['updated_at'],
+            'state': pr_metadata['state'],
             'head': {
-                'ref': pr_data['head']['ref'],
-                'sha': pr_data['head']['sha'],
+                'ref': pr_metadata['head']['ref'],
+                'sha': pr_metadata['head']['sha'],
                 'repo': {
-                    'full_name': pr_data['head']['repo']['full_name'] if pr_data['head']['repo'] else repo_name
+                    'full_name': pr_metadata['head']['repo']['full_name'] if pr_metadata['head']['repo'] else repo_name
                 }
             },
             'base': {
-                'ref': pr_data['base']['ref'],
-                'sha': pr_data['base']['sha']
+                'ref': pr_metadata['base']['ref'],
+                'sha': pr_metadata['base']['sha']
             },
-            'files': [
-                {
-                    'filename': f['filename'],
-                    'status': f['status'],
-                    'additions': f['additions'],
-                    'deletions': f['deletions'],
-                    'changes': f['changes'],
-                    'patch': f.get('patch', '')
-                }
-                for f in files_data
-                if not self._is_excluded(f['filename'])
-            ],
-            'additions': pr_data['additions'],
-            'deletions': pr_data['deletions'],
-            'changed_files': pr_data['changed_files']
+            'files': fetched_files,
+            'additions': pr_metadata['additions'],
+            'deletions': pr_metadata['deletions'],
+            'changed_files': pr_metadata['changed_files'],
+            # Diff data
+            'pr_diff': pr_diff,
+            'is_truncated': is_truncated,
+            'diff_stats': diff_stats
         }
-    
-    def get_pr_diff(self, repo_name: str, pr_number: int) -> str:
-        """Get complete PR diff in unified format.
+
+    def _format_file_diff(self, file_data: Dict[str, Any]) -> str:
+        """Format unified diff section for a single file.
+
+        Handles all file statuses: added, removed, modified, renamed, etc.
 
         Args:
-            repo_name: Repository name in format "owner/repo"
-            pr_number: Pull request number
+            file_data: File dictionary with filename, status, patch, etc.
 
         Returns:
-            Complete PR diff in unified format
+            Formatted unified diff section for this file
         """
-        url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}"
-        headers = dict(self.headers)
-        headers['Accept'] = 'application/vnd.github.diff'
+        filename = file_data['filename']
+        status = file_data.get('status', 'modified')
+        previous_filename = file_data.get('previous_filename')
+        patch = file_data.get('patch', '')
 
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
+        # Build diff header based on file status
+        diff_lines = []
+        diff_lines.append(f"diff --git a/{previous_filename or filename} b/{filename}")
 
-        return self._filter_generated_files(response.text)
+        if status == 'added':
+            diff_lines.append("new file mode 100644")
+            diff_lines.append("--- /dev/null")
+            diff_lines.append(f"+++ b/{filename}")
+        elif status == 'removed':
+            diff_lines.append("deleted file mode 100644")
+            diff_lines.append(f"--- a/{filename}")
+            diff_lines.append("+++ /dev/null")
+        elif status == 'renamed':
+            diff_lines.append("similarity index 100%")
+            diff_lines.append(f"rename from {previous_filename}")
+            diff_lines.append(f"rename to {filename}")
+            diff_lines.append(f"--- a/{previous_filename}")
+            diff_lines.append(f"+++ b/{filename}")
+        else:  # modified, changed, copied, unchanged
+            diff_lines.append(f"--- a/{filename}")
+            diff_lines.append(f"+++ b/{filename}")
+
+        # Add patch content
+        diff_lines.append(patch)
+
+        return '\n'.join(diff_lines) + '\n'
 
     def get_pr_comments(self, repo_name: str, pr_number: int) -> List[Dict[str, Any]]:
         """Get all review comments for a PR with pagination.
@@ -736,13 +896,56 @@ def main():
             print(json.dumps({'error': f'Claude Code not available: {claude_error}'}))
             sys.exit(EXIT_GENERAL_ERROR)
         
-        # Get PR data
+        # Parse max diff chars setting (with backward compatibility for max_diff_lines)
+        max_diff_chars_str = os.environ.get('MAX_DIFF_CHARS', '')
+        max_diff_lines_str = os.environ.get('MAX_DIFF_LINES', '')
+
+        if max_diff_chars_str:
+            # New parameter takes precedence
+            try:
+                max_diff_chars = int(max_diff_chars_str)
+            except ValueError:
+                max_diff_chars = DEFAULT_MAX_DIFF_CHARS
+        elif max_diff_lines_str:
+            # Backward compatibility: convert lines to chars
+            try:
+                max_diff_lines = int(max_diff_lines_str)
+                max_diff_chars = max_diff_lines * CHARS_PER_LINE_ESTIMATE
+                logger.info(f"[DEPRECATED] MAX_DIFF_LINES used ({max_diff_lines} lines). "
+                           f"Converted to {max_diff_chars} chars. Please use MAX_DIFF_CHARS instead.")
+            except ValueError:
+                max_diff_chars = DEFAULT_MAX_DIFF_CHARS
+        else:
+            # Use default
+            max_diff_chars = DEFAULT_MAX_DIFF_CHARS
+
+        # Get PR data with integrated diff construction
         try:
-            pr_data = github_client.get_pr_data(repo_name, pr_number)
-            pr_diff = github_client.get_pr_diff(repo_name, pr_number)
+            pr_data = github_client.get_pr_data(repo_name, pr_number, max_diff_chars)
         except Exception as e:
             print(json.dumps({'error': f'Failed to fetch PR data: {str(e)}'}))
             sys.exit(EXIT_GENERAL_ERROR)
+
+        # Extract diff data from pr_data
+        pr_diff = pr_data['pr_diff']
+        is_truncated = pr_data['is_truncated']
+        diff_stats = pr_data['diff_stats']
+
+        diff_char_count = len(pr_diff)
+
+        # Determine review mode
+        force_agentic_mode = max_diff_chars == 0  # User explicitly requested agentic mode
+        use_partial_diff_mode = is_truncated and not force_agentic_mode
+
+        # Log mode selection
+        if force_agentic_mode:
+            logger.info(f"Using full agentic mode (MAX_DIFF_CHARS=0)")
+        elif use_partial_diff_mode:
+            included = diff_stats['files_included']
+            total = diff_stats['total_files']
+            logger.info(f"Using partial diff mode ({included}/{total} files, {diff_char_count:,} chars)")
+        else:
+            logger.info(f"Using full diff mode ({diff_char_count:,} chars, {diff_stats['files_included']} files)")
 
         # Fetch PR comments and build review context
         review_context = None
@@ -781,26 +984,19 @@ def main():
             logger.warning(f"Failed to fetch review context (continuing without it): {e}")
             review_context = None
 
-        # Determine whether to embed diff or use agentic file reading
-        max_diff_lines_str = os.environ.get('MAX_DIFF_LINES', '5000')
-        try:
-            max_diff_lines = int(max_diff_lines_str)
-        except ValueError:
-            max_diff_lines = 5000
-
-        diff_line_count = len(pr_diff.splitlines())
-        use_agentic_mode = max_diff_lines == 0 or diff_line_count > max_diff_lines
-
-        if use_agentic_mode:
-            print(f"[Info] Using agentic file reading mode (diff has {diff_line_count} lines, threshold: {max_diff_lines})", file=sys.stderr)
-        else:
-            print(f"[Debug] Embedding diff in prompt ({diff_line_count} lines)", file=sys.stderr)
+        # Prepare diff metadata for prompt
+        diff_metadata = None
+        if use_partial_diff_mode:
+            diff_metadata = {
+                'is_truncated': True,
+                'stats': diff_stats
+            }
 
         # Get repo directory from environment or use current directory
         repo_path = os.environ.get('REPO_PATH')
         repo_dir = Path(repo_path) if repo_path else Path.cwd()
 
-        def run_review(include_diff: bool):
+        def run_review(include_diff: bool, diff_metadata=None):
             prompt_text = get_unified_review_prompt(
                 pr_data,
                 pr_diff if include_diff else None,
@@ -808,6 +1004,7 @@ def main():
                 custom_review_instructions=custom_review_instructions,
                 custom_security_instructions=custom_security_instructions,
                 review_context=review_context,
+                diff_metadata=diff_metadata,
             )
             return claude_runner.run_code_review(repo_dir, prompt_text), len(prompt_text)
 
@@ -815,11 +1012,22 @@ def main():
         pr_summary_from_review = {}
 
         try:
-            (success, error_msg, review_results), prompt_len = run_review(include_diff=not use_agentic_mode)
+            if force_agentic_mode:
+                # Full agentic mode - no diff
+                (success, error_msg, review_results), prompt_len = run_review(include_diff=False)
+            elif use_partial_diff_mode:
+                # Partial diff mode - include truncated diff with metadata
+                (success, error_msg, review_results), prompt_len = run_review(
+                    include_diff=True,
+                    diff_metadata=diff_metadata
+                )
+            else:
+                # Full diff mode
+                (success, error_msg, review_results), prompt_len = run_review(include_diff=True)
 
-            # Fallback to agentic mode if prompt still too long
+            # Fallback to full agentic if prompt still too long
             if not success and error_msg == "PROMPT_TOO_LONG":
-                print(f"[Info] Prompt too long ({prompt_len} chars), falling back to agentic mode", file=sys.stderr)
+                logger.info(f"Prompt too long ({prompt_len} chars), falling back to full agentic mode")
                 (success, error_msg, review_results), prompt_len = run_review(include_diff=False)
 
             if not success:
@@ -865,19 +1073,26 @@ def main():
 
         high_count, medium_count, low_count = severity_counts(kept_findings)
 
-        # Calculate files_reviewed from pr_summary.file_changes
-        files_reviewed = 0
+        # Calculate files_reviewed by merging:
+        # 1. Files included in embedded diff (from diff_stats)
+        # 2. Additional files mentioned in pr_summary (Claude explored via git commands)
+        all_reviewed_files = set()
+
+        # Add files from embedded diff
+        if diff_stats and 'included_file_list' in diff_stats:
+            all_reviewed_files.update(diff_stats['included_file_list'])
+
+        # Add files from pr_summary (files Claude explored beyond the embedded diff)
         if isinstance(pr_summary_from_review, dict):
             file_changes = pr_summary_from_review.get('file_changes', [])
             if isinstance(file_changes, list):
-                # Count unique files from all 'files' arrays
-                all_files = set()
                 for entry in file_changes:
                     if isinstance(entry, dict):
                         files_list = entry.get('files', [])
                         if isinstance(files_list, list):
-                            all_files.update(files_list)
-                files_reviewed = len(all_files)
+                            all_reviewed_files.update(files_list)
+
+        files_reviewed = len(all_reviewed_files)
 
         # Prepare output
         output = {

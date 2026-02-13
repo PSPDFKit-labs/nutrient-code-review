@@ -6,10 +6,44 @@ def _format_files_changed(pr_data):
     return "\n".join([f"- {f['filename']}" for f in pr_data['files']])
 
 
-def _build_diff_section(pr_diff, include_diff):
-    """Build prompt section for inline diff or agentic file reading."""
+def _build_diff_section(pr_diff, include_diff, diff_metadata=None):
+    """Build prompt section for inline diff, partial diff, or agentic file reading."""
     if pr_diff and include_diff:
-        return f"""
+        # Check if this is a partial diff
+        is_truncated = diff_metadata and diff_metadata.get('is_truncated', False)
+
+        if is_truncated:
+            # PARTIAL DIFF MODE
+            stats = diff_metadata.get('stats', {})
+            files_included = stats.get('files_included', 0)
+            total_files = stats.get('total_files', 0)
+            remaining_files = total_files - files_included
+
+            return f"""
+
+IMPORTANT - PARTIAL DIFF PROVIDED:
+The diff below shows {files_included} of {total_files} changed files.
+The remaining {remaining_files} files are not included due to size limits.
+
+To see all changes in this PR:
+1. Run: git diff --stat
+   This shows all changed files with line counts
+2. Run: git diff <filename>
+   To see specific file changes
+3. Use the Read tool to examine files in detail
+
+Note: The repository is configured so plain 'git diff' shows PR changes.
+
+PR DIFF CONTENT ({files_included}/{total_files} files):
+```
+{pr_diff}
+```
+
+The diff above is partial. Use git diff --stat and git diff <filename> to explore
+the remaining {remaining_files} files not shown above.
+"""
+        else:
+            return f"""
 
 PR DIFF CONTENT:
 ```
@@ -22,13 +56,22 @@ Review the complete diff above. This contains all code changes in the PR.
     return """
 
 IMPORTANT - FILE READING INSTRUCTIONS:
-You have access to the repository files. For each file listed above, use the Read tool to examine the changes.
-Focus on the files that are most likely to contain issues based on the PR context.
+No diff is provided. You have access to the repository and git tools to explore the changes.
+
+To see all changes in this PR:
+1. Run: git diff --stat
+   This shows all changed files with line counts
+2. Run: git diff <filename>
+   To see specific file changes
+3. Use the Read tool to examine files in detail
+
+Note: The repository is configured so plain 'git diff' shows PR changes.
 
 To review effectively:
-1. Read each modified file to understand the current code
-2. Look at surrounding code context when needed to understand the changes
-3. Check related files if you need to understand dependencies or usage patterns
+1. Start with git diff --stat to understand the scope of changes
+2. Use git diff <filename> to see changes for files most likely to have issues
+3. Use the Read tool to examine complete files when you need full context
+4. Check related files if you need to understand dependencies or usage patterns
 """
 
 
@@ -39,6 +82,7 @@ def get_unified_review_prompt(
     custom_review_instructions=None,
     custom_security_instructions=None,
     review_context=None,
+    diff_metadata=None,
 ):
     """Generate unified code review + security prompt for Claude Code.
 
@@ -52,13 +96,14 @@ def get_unified_review_prompt(
         custom_review_instructions: Optional custom review instructions to append
         custom_security_instructions: Optional custom security instructions to append
         review_context: Optional previous review context (bot findings and user replies)
+        diff_metadata: Optional metadata about diff truncation (for partial diff mode)
 
     Returns:
         Formatted prompt string
     """
 
     files_changed = _format_files_changed(pr_data)
-    diff_section = _build_diff_section(pr_diff, include_diff)
+    diff_section = _build_diff_section(pr_diff, include_diff, diff_metadata)
 
     custom_review_section = ""
     if custom_review_instructions:

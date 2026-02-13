@@ -111,8 +111,10 @@ This action is not hardened against prompt injection attacks and should only be 
 | `comment-pr` | Whether to comment on PRs with findings | `true` | No |
 | `upload-results` | Whether to upload results as artifacts | `true` | No |
 | `exclude-directories` | Comma-separated list of directories to exclude from scanning | None | No |
-| `claude-model` | Claude [model name](https://docs.anthropic.com/en/docs/about-claude/models/overview#model-names) to use. Defaults to Opus 4.5. | `claude-opus-4-5-20251101` | No |
+| `claude-model` | Claude [model name](https://docs.anthropic.com/en/docs/about-claude/models/overview#model-names) to use. Defaults to Opus 4.5. For large PRs (>400k char diffs), consider using `claude-sonnet-4-5-20250929` (1M context). | `claude-opus-4-5-20251101` | No |
 | `claudecode-timeout` | Timeout for ClaudeCode analysis in minutes | `20` | No |
+| `max-diff-chars` | Maximum diff characters to include in prompt. Set to `0` for agentic mode (Claude uses git commands to explore). See [Diff Size Configuration](#diff-size-configuration) below. | `400000` | No |
+| `max-diff-lines` | **[DEPRECATED]** Use `max-diff-chars` instead. Converts lines to chars (line × 80). | None | No |
 | `run-every-commit` | Run ClaudeCode on every commit (skips cache check). Warning: May increase false positives on PRs with many commits. **Deprecated**: Use `trigger-on-commit` instead. | `false` | No |
 | `trigger-on-open` | Run review when PR is first opened | `true` | No |
 | `trigger-on-commit` | Run review on every new commit | `false` | No |
@@ -134,6 +136,64 @@ This action is not hardened against prompt injection attacks and should only be 
 |--------|-------------|
 | `findings-count` | Total number of code review findings |
 | `results-file` | Path to the results JSON file |
+
+### Diff Size Configuration
+
+The action handles PRs of any size using three review modes:
+
+#### Review Modes
+
+1. **Full Diff Mode** (default for small PRs)
+   - Entire diff embedded in prompt
+   - Fastest and most comprehensive
+   - Works for diffs up to ~400k characters
+
+2. **Partial Diff Mode** (automatic for large PRs)
+   - First N files embedded in prompt
+   - Claude uses git commands to explore remaining files
+   - Balances embedded context with agentic exploration
+
+3. **Full Agentic Mode** (set `max-diff-chars: 0`)
+   - No diff embedded
+   - Claude uses git commands to explore all changes
+   - Most flexible for massive PRs (1000+ files)
+
+#### Configuration
+
+**`max-diff-chars`** - Maximum diff characters to embed (default: 400,000)
+
+```yaml
+# Default: 400k chars (fits in 200k token models)
+- uses: PSPDFKit-labs/nutrient-code-review@main
+  with:
+    claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+    max-diff-chars: 400000  # ~100k tokens
+
+# Large PRs: Use 1M context model with higher limit
+- uses: PSPDFKit-labs/nutrient-code-review@main
+  with:
+    claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+    claude-model: claude-sonnet-4-5-20250929  # 1M context
+    max-diff-chars: 800000  # ~200k tokens
+
+# Always use agentic mode (no embedded diff)
+- uses: PSPDFKit-labs/nutrient-code-review@main
+  with:
+    claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+    max-diff-chars: 0  # Force agentic exploration
+```
+
+**Model Selection for Large Diffs:**
+
+| Diff Size | Recommended Model | Context Window |
+|-----------|-------------------|----------------|
+| < 400k chars | `claude-opus-4-5-20251101` (default) | 200k tokens |
+| 400k - 800k chars | `claude-sonnet-4-5-20250929` | 1M tokens |
+| > 800k chars | Set `max-diff-chars: 0` (agentic mode) | Any model |
+
+**Backward Compatibility:**
+
+`max-diff-lines` is deprecated but still supported. If used, it converts to characters: `max_diff_chars = max_diff_lines × 80`
 
 ### Re-Review Trigger Configuration
 

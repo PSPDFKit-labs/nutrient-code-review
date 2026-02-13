@@ -69,10 +69,25 @@ inputs:
     required: false
     default: ''
 
-  max-diff-lines:
-    description: 'Maximum diff lines to embed in prompt. Larger diffs use agentic file reading instead. Set to 0 to always use agentic mode. Default: 5000'
+  max-diff-chars:
+    description: |
+      Maximum diff characters to embed in prompt (default: 400000 = 400k chars).
+      Larger diffs use agentic file reading instead. Set to 0 to always use agentic mode.
+
+      IMPORTANT: For large limits (>400k), use a model with larger context like:
+      - claude-sonnet-4-5-20250929 (1M context) for diffs up to 800k chars
+      - Set via 'claude-model' input parameter
+
+      Note: ~400k chars fits comfortably in 200k token models (Opus/Sonnet standard).
     required: false
-    default: '5000'
+    default: '400000'
+
+  max-diff-lines:
+    description: |
+      [DEPRECATED] Use 'max-diff-chars' instead. This converts lines to chars (line * 80).
+      Kept for backward compatibility only. If both set, max-diff-chars takes precedence.
+    required: false
+    default: ''
 
   trigger-on-open:
     description: 'Run review when PR is first opened'
@@ -147,6 +162,12 @@ runs:
             exit 1
           fi
 
+          if ! PR_BASE_SHA=$(echo "$PR_DATA" | jq -r '.base.sha' 2>&1); then
+            echo "Error: Failed to parse PR base SHA from API response"
+            echo "is_pr=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
           # Extract PR labels (array of label names)
           if ! PR_LABELS=$(echo "$PR_DATA" | jq -c '[.labels[].name]' 2>&1); then
             echo "Error: Failed to parse PR labels from API response"
@@ -163,11 +184,12 @@ runs:
 
           echo "pr_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
           echo "pr_sha=$PR_HEAD_SHA" >> $GITHUB_OUTPUT
+          echo "pr_base_sha=$PR_BASE_SHA" >> $GITHUB_OUTPUT
           echo "pr_labels=$PR_LABELS" >> $GITHUB_OUTPUT
           echo "is_draft=$IS_DRAFT" >> $GITHUB_OUTPUT
           echo "is_pr=true" >> $GITHUB_OUTPUT
 
-          echo "Issue comment is on PR #${{ github.event.issue.number }} with SHA $PR_HEAD_SHA"
+          echo "Issue comment is on PR #${{ github.event.issue.number }} with base SHA $PR_BASE_SHA, head SHA $PR_HEAD_SHA"
         else
           echo "is_pr=false" >> $GITHUB_OUTPUT
           echo "Issue comment is not on a PR, skipping"
@@ -323,6 +345,36 @@ runs:
       with:
         node-version: '18'
     
+    - name: Setup git for diffing
+      if: steps.claudecode-check.outputs.enable_claudecode == 'true'
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha || steps.pr-info.outputs.pr_base_sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
+      run: |
+        echo "::group::Prepare repository so 'git diff' shows PR changes"
+
+        BASE_COMMIT="$BASE_SHA"
+        HEAD_COMMIT="$HEAD_SHA"
+
+        echo "Base SHA (PR snapshot): $BASE_COMMIT"
+        echo "Head SHA (current PR): $HEAD_COMMIT"
+
+        # Fetch both commits
+        git fetch origin "$BASE_COMMIT" --depth=1
+        git fetch origin "$HEAD_COMMIT" --depth=1
+
+        # Reset to base commit (B)
+        git checkout "$BASE_COMMIT"
+
+        # Restore PR files to working directory (E) - NOT staged
+        git restore --source="$HEAD_COMMIT" --worktree .
+
+        # Now: HEAD=B, index=B, worktree=E
+        # So: git diff shows B → E (PR changes)
+        echo "Repository prepared. Plain 'git diff' now shows PR changes."
+        echo "::endgroup::"
+
     - name: Install dependencies
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
       shell: bash
@@ -352,6 +404,7 @@ runs:
         CUSTOM_SECURITY_SCAN_INSTRUCTIONS: ${{ inputs.custom-security-scan-instructions }}
         CLAUDE_MODEL: ${{ inputs.claude-model }}
         CLAUDECODE_TIMEOUT: ${{ inputs.claudecode-timeout }}
+        MAX_DIFF_CHARS: ${{ inputs.max-diff-chars }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         ACTION_PATH: ${{ github.action_path }}
       run: |

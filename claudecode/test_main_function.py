@@ -12,6 +12,42 @@ from pathlib import Path
 from claudecode.github_action_audit import main
 
 
+def make_pr_data(pr_diff='diff', is_truncated=False, files_included=1, total_files=1, files=None, **kwargs):
+    """Helper to create complete PR data mock with all required fields."""
+    base_data = {
+        'number': 123,
+        'title': 'Test PR',
+        'body': '',
+        'user': 'testuser',
+        'created_at': '2024-01-01T00:00:00Z',
+        'updated_at': '2024-01-01T01:00:00Z',
+        'state': 'open',
+        'head': {
+            'ref': 'feature',
+            'sha': 'abc123',
+            'repo': {'full_name': 'owner/repo'}
+        },
+        'base': {
+            'ref': 'main',
+            'sha': 'def456'
+        },
+        'files': files or [],
+        'additions': 10,
+        'deletions': 5,
+        'changed_files': total_files,
+        # Diff data (new fields)
+        'pr_diff': pr_diff,
+        'is_truncated': is_truncated,
+        'diff_stats': {
+            'files_included': files_included,
+            'total_files': total_files,
+            'included_file_list': [f['filename'] for f in (files or [])] if files else []
+        }
+    }
+    base_data.update(kwargs)
+    return base_data
+
+
 class TestMainFunction:
     """Test main function execution flow."""
 
@@ -216,18 +252,90 @@ class TestMainFunction:
     @patch('claudecode.github_action_audit.FindingsFilter')
     @patch('claudecode.github_action_audit.SimpleClaudeRunner')
     @patch('claudecode.github_action_audit.GitHubActionClient')
+    def test_main_partial_diff_mode(self, mock_client_class, mock_runner_class,
+                                     mock_filter_class, mock_prompt_func,
+                                     mock_cwd, capsys):
+        """Test partial diff mode when diff exceeds MAX_DIFF_LINES."""
+        # Setup mocks
+        mock_client = Mock()
+        mock_client.get_pr_data.return_value = make_pr_data(
+            pr_diff="partial diff content",
+            is_truncated=True,
+            files_included=50,
+            total_files=300,
+            title='Large PR',
+            body='Large PR with many files'
+        )
+        mock_client.get_pr_comments.return_value = []
+        mock_client_class.return_value = mock_client
+
+        mock_runner = Mock()
+        mock_runner.validate_claude_available.return_value = (True, "")
+        mock_runner.run_code_review.return_value = (
+            True,
+            "",
+            {
+                'findings': [],
+                'analysis_summary': {
+                    'files_reviewed': 300,
+                    'high_severity': 0,
+                    'medium_severity': 0,
+                    'low_severity': 0
+                }
+            }
+        )
+        mock_runner_class.return_value = mock_runner
+
+        mock_filter = Mock()
+        mock_filter.filter_findings.return_value = (
+            True,
+            {
+                'filtered_findings': [],
+                'excluded_findings': [],
+                'analysis_summary': {}
+            },
+            Mock()
+        )
+        mock_filter_class.return_value = mock_filter
+        mock_cwd.return_value = Path('/test/repo')
+
+        with patch.dict(os.environ, {
+            'GITHUB_REPOSITORY': 'owner/repo',
+            'PR_NUMBER': '123',
+            'GITHUB_TOKEN': 'test-token'
+        }):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+            assert exc_info.value.code == 0  # Successful completion
+
+            # Verify prompt was called with partial diff metadata
+            call_args = mock_prompt_func.call_args
+            assert call_args is not None
+            # Diff should be included but with metadata
+            assert call_args[0][1] == "partial diff content"
+            assert call_args[1]['include_diff'] is True
+            # Check diff_metadata is passed
+            assert call_args[1]['diff_metadata'] is not None
+            assert call_args[1]['diff_metadata']['is_truncated'] is True
+
+    @patch('pathlib.Path.cwd')
+    @patch('claudecode.github_action_audit.get_unified_review_prompt')
+    @patch('claudecode.github_action_audit.FindingsFilter')
+    @patch('claudecode.github_action_audit.SimpleClaudeRunner')
+    @patch('claudecode.github_action_audit.GitHubActionClient')
     def test_main_successful_audit_no_findings(self, mock_client_class, mock_runner_class,
                                                mock_filter_class, mock_prompt_func,
                                                mock_cwd, capsys):
         """Test successful audit with no findings."""
         # Setup mocks
         mock_client = Mock()
-        mock_client.get_pr_data.return_value = {
-            'number': 123,
-            'title': 'Test PR',
-            'body': 'Description'
-        }
-        mock_client.get_pr_diff.return_value = "diff content"
+        mock_client.get_pr_data.return_value = make_pr_data(
+            pr_diff="diff content",
+            title='Test PR',
+            body='Description'
+        )
+        mock_client.get_pr_comments.return_value = []
         mock_client_class.return_value = mock_client
 
         mock_runner = Mock()
@@ -292,12 +400,11 @@ class TestMainFunction:
         """Test successful audit with high severity findings."""
         # Setup mocks
         mock_client = Mock()
-        mock_client.get_pr_data.return_value = {
-            'number': 123,
-            'title': 'Test PR',
-            'body': 'Description'
-        }
-        mock_client.get_pr_diff.return_value = "diff content"
+        mock_client.get_pr_data.return_value = make_pr_data(
+            title='Test PR',
+            body='Description'
+        )
+        mock_client.get_pr_comments.return_value = []
         mock_client._is_excluded.return_value = False  # Don't exclude any files in tests
         mock_client_class.return_value = mock_client
 
@@ -384,12 +491,11 @@ class TestMainFunction:
         """Test main with full FindingsFilter (LLM-based)."""
         # Setup mocks
         mock_client = Mock()
-        mock_client.get_pr_data.return_value = {
-            'number': 123,
-            'title': 'Test PR',
-            'body': 'Description'
-        }
-        mock_client.get_pr_diff.return_value = "diff content"
+        mock_client.get_pr_data.return_value = make_pr_data(
+            title='Test PR',
+            body='Description'
+        )
+        mock_client.get_pr_comments.return_value = []
         mock_client._is_excluded.return_value = False  # Don't exclude any files in tests
         mock_client_class.return_value = mock_client
 
@@ -447,8 +553,8 @@ class TestMainFunction:
         """Test that filter failure keeps all findings with SimpleFindingsFilter."""
         # Setup mocks
         mock_client = Mock()
-        mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
-        mock_client.get_pr_diff.return_value = "diff"
+        mock_client.get_pr_data.return_value = make_pr_data()
+        mock_client.get_pr_comments.return_value = []
         mock_client._is_excluded.return_value = False  # Don't exclude any files in tests
         mock_client_class.return_value = mock_client
 
@@ -533,8 +639,8 @@ class TestAuditFailureModes:
                           mock_cwd, capsys):
         """Test when code review fails."""
         mock_client = Mock()
-        mock_client.get_pr_data.return_value = {'number': 123}
-        mock_client.get_pr_diff.return_value = "diff"
+        mock_client.get_pr_data.return_value = make_pr_data()
+        mock_client.get_pr_comments.return_value = []
         mock_client_class.return_value = mock_client
 
         mock_runner = Mock()
@@ -579,8 +685,8 @@ class TestReviewTypeMetadata:
                                                mock_cwd, capsys):
         """Test that findings get review_type based on category."""
         mock_client = Mock()
-        mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
-        mock_client.get_pr_diff.return_value = "diff"
+        mock_client.get_pr_data.return_value = make_pr_data()
+        mock_client.get_pr_comments.return_value = []
         mock_client._is_excluded.return_value = False
         mock_client_class.return_value = mock_client
 
@@ -641,8 +747,8 @@ class TestReviewTypeMetadata:
                                                         mock_cwd, capsys):
         """Test that review_type is not overwritten if finding already has it."""
         mock_client = Mock()
-        mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
-        mock_client.get_pr_diff.return_value = "diff"
+        mock_client.get_pr_data.return_value = make_pr_data()
+        mock_client.get_pr_comments.return_value = []
         mock_client._is_excluded.return_value = False
         mock_client_class.return_value = mock_client
 

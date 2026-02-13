@@ -198,7 +198,11 @@ index 8901234..5678901 100644
             }
         ]
 
-        mock_get.side_effect = [pr_response, files_response, diff_response, comments_response, reactions_response]
+        # Empty response for files page 2 to stop pagination
+        files_response_page2 = Mock()
+        files_response_page2.json.return_value = []
+
+        mock_get.side_effect = [pr_response, files_response, files_response_page2, comments_response, reactions_response]
 
         # Setup Claude response
         claude_response = {
@@ -279,8 +283,10 @@ index 8901234..5678901 100644
                 assert exc_info.value.code == 1
         
         # Verify API calls
-        # 5 calls: PR data, files, diff, comments, reactions for bot comment
-        assert mock_get.call_count == 5
+        # 3 calls: PR data, files page 1 (stops since <100 files), comments page 1
+        # Note: comments makes 1 call, gets empty list, stops
+        # Reactions not called since no bot comments in this test
+        assert mock_get.call_count == 3
         assert mock_run.call_count == 2  # 1 version check + 1 unified review
         
         # Verify the audit was run with proper prompt
@@ -485,25 +491,28 @@ class TestWorkflowEdgeCases:
             'changed_files': 500
         }
         
-        files_response = Mock()
-        files_response.json.return_value = large_files
-        
-        # Create massive diff
-        diff_parts = []
-        for i in range(500):
-            diff_parts.append(f'''diff --git a/src/file{i}.py b/src/file{i}.py
-new file mode 100644
-index 0000000..1234567
---- /dev/null
-+++ b/src/file{i}.py
-@@ -0,0 +1,100 @@
-+# File {i}
-''' + '\n'.join([f'+line {j}' for j in range(99)]))
-        
-        diff_response = Mock()
-        diff_response.text = '\n'.join(diff_parts)
-        
-        mock_get.side_effect = [pr_response, files_response, diff_response]
+        # Paginate files (100 per page)
+        files_page1 = Mock()
+        files_page1.json.return_value = large_files[:100]
+
+        files_page2 = Mock()
+        files_page2.json.return_value = large_files[100:200]
+
+        files_page3 = Mock()
+        files_page3.json.return_value = large_files[200:300]
+
+        files_page4 = Mock()
+        files_page4.json.return_value = large_files[300:400]
+
+        files_page5 = Mock()
+        files_page5.json.return_value = large_files[400:500]
+
+        # Empty page to stop pagination
+        files_page6 = Mock()
+        files_page6.json.return_value = []
+
+        # No diff_response needed - diff is now constructed from files
+        mock_get.side_effect = [pr_response, files_page1, files_page2, files_page3, files_page4, files_page5, files_page6]
         
         # Claude handles it gracefully
         mock_run.side_effect = [

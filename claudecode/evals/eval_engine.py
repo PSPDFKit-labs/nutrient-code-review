@@ -451,7 +451,14 @@ class EvaluationEngine:
             )
             
             output = result.stdout
-            
+
+            # Display stderr in verbose mode (contains logging from github_action_audit.py)
+            if self.verbose and result.stderr:
+                self.log("Code review stderr output:", prefix="[AUDIT]")
+                for line in result.stderr.splitlines():
+                    if line.strip():
+                        print(f"[AUDIT] {line}", file=sys.stderr)
+
             # Parse the JSON output first to see if we got valid results
             success, parsed_results = parse_json_with_fallbacks(output)
             if not success:

@@ -43,6 +43,11 @@ def get_logger(name: str) -> logging.Logger:
         formatter = logging.Formatter(format_str)
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-    
+
+        # Enable DEBUG logging in eval mode for detailed file-by-file tracking
+        if os.environ.get('EVAL_MODE') == '1':
+            logger.setLevel(logging.DEBUG)
+        else:
+            logger.setLevel(logging.INFO)
+
     return logger
