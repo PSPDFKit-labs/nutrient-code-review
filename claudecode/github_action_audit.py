@@ -17,6 +17,7 @@ import time
 # Import existing components we can reuse
 from claudecode.findings_filter import FindingsFilter
 from claudecode.json_parser import parse_json_with_fallbacks
+from claudecode.format_pr_comments import format_pr_comments_for_prompt, is_bot_comment
 from claudecode.prompts import get_unified_review_prompt  # Backward-compatible import for tests/extensions.
 from claudecode.review_orchestrator import ReviewModelConfig, ReviewOrchestrator
 from claudecode.constants import (
@@ -27,6 +28,7 @@ from claudecode.constants import (
     SUBPROCESS_TIMEOUT
 )
 from claudecode.logger import get_logger
+from claudecode.review_schema import REVIEW_OUTPUT_SCHEMA
 
 logger = get_logger(__name__)
 
@@ -201,6 +203,56 @@ class GitHubActionClient:
         response.raise_for_status()
         
         return self._filter_generated_files(response.text)
+
+    def get_pr_comments(self, repo_name: str, pr_number: int) -> List[Dict[str, Any]]:
+        """Get all review comments for a PR with pagination."""
+        all_comments = []
+        page = 1
+        per_page = 100
+
+        while True:
+            url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}/comments"
+            params = {'per_page': per_page, 'page': page}
+
+            try:
+                response = requests.get(url, headers=self.headers, params=params)
+                response.raise_for_status()
+                comments = response.json()
+
+                if not comments:
+                    break
+
+                all_comments.extend(comments)
+                if len(comments) < per_page:
+                    break
+                page += 1
+            except requests.RequestException as e:
+                logger.warning(f"Failed to fetch comments page {page}: {e}")
+                break
+
+        return all_comments
+
+    def get_comment_reactions(self, repo_name: str, comment_id: int) -> Dict[str, int]:
+        """Get reactions for a specific comment, excluding bot reactions."""
+        url = f"https://api.github.com/repos/{repo_name}/pulls/comments/{comment_id}/reactions"
+
+        try:
+            response = requests.get(url, headers=self.headers)
+            response.raise_for_status()
+            reactions = response.json()
+
+            counts: Dict[str, int] = {}
+            for reaction in reactions:
+                user = reaction.get('user', {})
+                if user.get('type') == 'Bot':
+                    continue
+                content = reaction.get('content', '')
+                if content:
+                    counts[content] = counts.get(content, 0) + 1
+            return counts
+        except requests.RequestException as e:
+            logger.debug(f"Failed to fetch reactions for comment {comment_id}: {e}")
+            return {}
     
     def _is_excluded(self, filepath: str) -> bool:
         """Check if a file should be excluded based on directory or file patterns."""
@@ -298,7 +350,8 @@ class SimpleClaudeRunner:
                 'claude',
                 '--output-format', 'json',
                 '--model', model_name,
-                '--disallowed-tools', 'Bash(ps:*)'
+                '--disallowed-tools', 'Bash(ps:*)',
+                '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA),
             ]
 
             NUM_RETRIES = 3
@@ -370,11 +423,14 @@ class SimpleClaudeRunner:
                     # Try to extract JSON from the result text
                     success, result_json = parse_json_with_fallbacks(result_text, "Claude result text")
                     if success and result_json and 'findings' in result_json:
+                        if 'pr_summary' not in result_json:
+                            result_json['pr_summary'] = {}
                         return result_json
         
         # Return empty structure if no findings found
         return {
             'findings': [],
+            'pr_summary': {},
             'analysis_summary': {
                 'files_reviewed': 0,
                 'high_severity': 0,
@@ -675,6 +731,34 @@ def main():
         except Exception as e:
             print(json.dumps({'error': f'Failed to fetch PR data: {str(e)}'}))
             sys.exit(EXIT_GENERAL_ERROR)
+
+        # Backward-compatible context collection for review thread history.
+        review_context = None
+        try:
+            pr_comments = github_client.get_pr_comments(repo_name, pr_number)
+            if pr_comments:
+                bot_comment_threads = []
+                for comment in pr_comments:
+                    if is_bot_comment(comment):
+                        reactions = github_client.get_comment_reactions(repo_name, comment['id'])
+                        replies = [
+                            c for c in pr_comments
+                            if c.get('in_reply_to_id') == comment['id']
+                        ]
+                        replies.sort(key=lambda c: c.get('created_at', ''))
+                        bot_comment_threads.append({
+                            'bot_comment': comment,
+                            'replies': replies,
+                            'reactions': reactions,
+                        })
+                bot_comment_threads.sort(key=lambda t: t['bot_comment'].get('created_at', ''))
+                if bot_comment_threads:
+                    review_context = format_pr_comments_for_prompt(bot_comment_threads)
+                    if review_context:
+                        logger.info(f"Fetched previous review context ({len(review_context)} chars)")
+        except Exception as e:
+            logger.warning(f"Failed to fetch review context (continuing without it): {e}")
+            review_context = None
 
         max_diff_lines = get_max_diff_lines()
         diff_line_count = len(pr_diff.splitlines())

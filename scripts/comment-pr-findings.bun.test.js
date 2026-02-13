@@ -1076,7 +1076,7 @@ describe('comment-pr-findings.js', () => {
     test('should update existing review in place when state is unchanged and no inline comments', async () => {
       // Existing APPROVED review, new findings also result in APPROVED (no HIGH severity)
       const mockReviews = [
-        { id: 101, state: 'APPROVED', user: { type: 'Bot' }, body: 'No issues found. Changes look good.' }
+        { id: 101, state: 'APPROVED', user: { type: 'Bot' }, body: '<!-- nutrient-code-review-action -->\nNo issues found. Changes look good.' }
       ];
 
       readFileSyncSpy.mockImplementation((path) => {
@@ -1129,7 +1129,7 @@ describe('comment-pr-findings.js', () => {
     test('should dismiss and create new review when state changes', async () => {
       // Existing APPROVED review, but new findings have HIGH severity = CHANGES_REQUESTED
       const mockReviews = [
-        { id: 101, state: 'APPROVED', user: { type: 'Bot' }, body: 'No issues found. Changes look good.' }
+        { id: 101, state: 'APPROVED', user: { type: 'Bot' }, body: '<!-- nutrient-code-review-action -->\nNo issues found. Changes look good.' }
       ];
 
       const mockFindings = [{
