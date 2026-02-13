@@ -118,12 +118,7 @@ runs:
         # Install GitHub CLI for PR operations
         sudo apt-get update && sudo apt-get install -y gh
         echo "::endgroup::"
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
-    
+
     - name: Get PR info for issue_comment events
       id: pr-info
       if: github.event_name == 'issue_comment'
@@ -349,7 +344,13 @@ runs:
       with:
         path: .claudecode-marker
         key: claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha || github.sha }}
-    
+
+    - name: Set up Python
+      if: steps.claudecode-check.outputs.enable_claudecode == 'true'
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
     - name: Set up Node.js
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
       uses: actions/setup-node@v4
@@ -357,15 +358,14 @@ runs:
         node-version: '18'
     
     - name: Install dependencies
+      if: steps.claudecode-check.outputs.enable_claudecode == 'true'
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         echo "::group::Install Deps"
-        if [ "${{ steps.claudecode-check.outputs.enable_claudecode }}" == "true" ]; then
-          pip install -r "$ACTION_PATH/claudecode/requirements.txt"
-          npm install -g @anthropic-ai/claude-code
-        fi
+        pip install -r "$ACTION_PATH/claudecode/requirements.txt"
+        npm install -g @anthropic-ai/claude-code
         sudo apt-get update && sudo apt-get install -y jq
         echo "::endgroup::"
     

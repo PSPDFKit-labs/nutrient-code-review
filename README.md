@@ -34,12 +34,16 @@ on:
 jobs:
   review:
     runs-on: ubuntu-latest
+    # IMPORTANT: This condition prevents the job from running on non-PR events,
+    # saving GitHub Actions minutes. Without this, the runner starts and bills
+    # for ~20-40 seconds even when the action skips internally.
+    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
-      
+
       - uses: PSPDFKit-labs/nutrient-code-review@main
         with:
           comment-pr: true
@@ -176,8 +180,12 @@ on:
 jobs:
   review:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
       - uses: PSPDFKit-labs/nutrient-code-review@main
         with:
           claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
@@ -201,6 +209,25 @@ concurrency:
   group: code-review-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false  # Queues new runs instead
 ```
+
+### Billing Optimization (Recommended)
+
+**Important:** Always add a job-level `if:` condition to prevent wasting GitHub Actions minutes on non-PR events.
+
+Without this condition, the runner starts and bills for ~20-40 seconds even when the action skips internally. The `if:` condition prevents the job from starting at all:
+
+```yaml
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+```
+
+**Why this matters:**
+- Without job-level `if:`: Runner starts → action installs dependencies → determines to skip → **~20-40s billed**
+- With job-level `if:`: Job never starts for non-PR events → **0s billed**
+
+This is especially important if you use `workflow_dispatch` or other event types that might not be PR-related.
 
 ## How It Works
 

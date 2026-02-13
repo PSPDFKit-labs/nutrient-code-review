@@ -395,7 +395,32 @@ class SimpleClaudeRunner:
                     text=True,
                     timeout=self.timeout_seconds
                 )
-                
+
+                # Parse JSON output (even if returncode != 0, to detect specific errors)
+                success, parsed_result = parse_json_with_fallbacks(result.stdout, "Claude Code output")
+
+                if success:
+                    # Check for "Prompt is too long" error that should trigger fallback to agentic mode
+                    if (isinstance(parsed_result, dict) and
+                        parsed_result.get('type') == 'result' and
+                        parsed_result.get('subtype') == 'success' and
+                        parsed_result.get('is_error') and
+                        parsed_result.get('result') == 'Prompt is too long'):
+                        return False, "PROMPT_TOO_LONG", {}
+
+                    # Check for error_during_execution that should trigger retry
+                    if (isinstance(parsed_result, dict) and
+                        parsed_result.get('type') == 'result' and
+                        parsed_result.get('subtype') == 'error_during_execution' and
+                        attempt == 0):
+                        continue  # Retry
+
+                    # If returncode is 0, extract review findings
+                    if result.returncode == 0:
+                        parsed_results = self._extract_review_findings(parsed_result)
+                        return True, "", parsed_results
+
+                # Handle non-zero return codes after parsing
                 if result.returncode != 0:
                     if attempt == NUM_RETRIES - 1:
                         error_details = f"Claude Code execution failed with return code {result.returncode}\n"
@@ -406,34 +431,12 @@ class SimpleClaudeRunner:
                         time.sleep(5*attempt)
                         # Note: We don't do exponential backoff here to keep the runtime reasonable
                         continue  # Retry
-                
-                # Parse JSON output
-                success, parsed_result = parse_json_with_fallbacks(result.stdout, "Claude Code output")
-                
-                if success:
-                    # Check for "Prompt is too long" error that should trigger retry without diff
-                    if (isinstance(parsed_result, dict) and 
-                        parsed_result.get('type') == 'result' and 
-                        parsed_result.get('subtype') == 'success' and
-                        parsed_result.get('is_error') and
-                        parsed_result.get('result') == 'Prompt is too long'):
-                        return False, "PROMPT_TOO_LONG", {}
-                    
-                    # Check for error_during_execution that should trigger retry
-                    if (isinstance(parsed_result, dict) and 
-                        parsed_result.get('type') == 'result' and 
-                        parsed_result.get('subtype') == 'error_during_execution' and
-                        attempt == 0):
-                        continue  # Retry
-                    
-                    # Extract review findings
-                    parsed_results = self._extract_review_findings(parsed_result)
-                    return True, "", parsed_results
+
+                # Parse failed
+                if attempt == 0:
+                    continue  # Retry once
                 else:
-                    if attempt == 0:
-                        continue  # Retry once
-                    else:
-                        return False, "Failed to parse Claude output", {}
+                    return False, "Failed to parse Claude output", {}
             
             return False, "Unexpected error in retry logic", {}
             
