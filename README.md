@@ -1,6 +1,6 @@
 # Nutrient Code Reviewer
 
-An AI-powered code review GitHub Action using Claude to analyze code changes. Uses a unified multi-agent approach for both code quality (correctness, reliability, performance, maintainability, testing) and security in a single pass. This action provides intelligent, context-aware review for pull requests using Anthropic's Claude Code tool for deep semantic analysis.
+An AI-powered code review GitHub Action using Claude to analyze code changes. Uses a unified multi-agent, multi-phase approach for both code quality (correctness, reliability, performance, maintainability, testing) and security. This action provides intelligent, context-aware review for pull requests using Anthropic's Claude Code tool for deep semantic analysis.
 
 Based on the original work from [anthropics/claude-code-security-review](https://github.com/anthropics/claude-code-security-review).
 

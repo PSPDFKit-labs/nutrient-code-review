@@ -12,6 +12,28 @@ from pathlib import Path
 from claudecode.github_action_audit import main
 
 
+def _mock_multiphase_success(mock_runner, findings=None):
+    """Configure runner mock for strict multi-phase orchestration."""
+    findings = findings or []
+    mock_runner.run_prompt.side_effect = [
+        (True, "", {"skip_review": False, "reason": "", "risk_level": "medium"}),  # triage
+        (True, "", {"claude_md_files": [], "change_summary": "", "hotspots": [], "priority_files": []}),  # context
+        (True, "", {"findings": findings}),  # compliance
+        (True, "", {"findings": []}),  # quality
+        (True, "", {"findings": []}),  # security
+        (
+            True,
+            "",
+            {
+                "validated_findings": [
+                    {"finding_index": idx, "keep": True, "confidence": 0.95, "reason": "valid"}
+                    for idx in range(len(findings))
+                ]
+            },
+        ),  # validation
+    ]
+
+
 class TestMainFunction:
     """Test main function execution flow."""
 
@@ -232,20 +254,7 @@ class TestMainFunction:
 
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        # Unified review - single call
-        mock_runner.run_code_review.return_value = (
-            True,
-            "",
-            {
-                'findings': [],
-                'analysis_summary': {
-                    'files_reviewed': 5,
-                    'high_severity': 0,
-                    'medium_severity': 0,
-                    'low_severity': 0
-                }
-            }
-        )
+        _mock_multiphase_success(mock_runner, findings=[])
         mock_runner_class.return_value = mock_runner
 
         mock_filter = Mock()
@@ -299,6 +308,7 @@ class TestMainFunction:
         }
         mock_client.get_pr_diff.return_value = "diff content"
         mock_client._is_excluded.return_value = False  # Don't exclude any files in tests
+        mock_client.is_excluded.return_value = False
         mock_client_class.return_value = mock_client
 
         findings = [
@@ -320,20 +330,7 @@ class TestMainFunction:
 
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        # Unified review - single call with all findings
-        mock_runner.run_code_review.return_value = (
-            True,
-            "",
-            {
-                'findings': findings,
-                'analysis_summary': {
-                    'files_reviewed': 2,
-                    'high_severity': 1,
-                    'medium_severity': 1,
-                    'low_severity': 0
-                }
-            }
-        )
+        _mock_multiphase_success(mock_runner, findings=findings)
         mock_runner_class.return_value = mock_runner
 
         # Filter keeps only high severity
@@ -391,13 +388,14 @@ class TestMainFunction:
         }
         mock_client.get_pr_diff.return_value = "diff content"
         mock_client._is_excluded.return_value = False  # Don't exclude any files in tests
+        mock_client.is_excluded.return_value = False
         mock_client_class.return_value = mock_client
 
         findings = [{'file': 'test.py', 'line': 10, 'severity': 'HIGH', 'description': 'Issue'}]
 
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_code_review.return_value = (True, "", {'findings': findings})
+        _mock_multiphase_success(mock_runner, findings=findings)
         mock_runner_class.return_value = mock_runner
 
         mock_prompt_func.return_value = "prompt"
@@ -450,6 +448,7 @@ class TestMainFunction:
         mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
         mock_client.get_pr_diff.return_value = "diff"
         mock_client._is_excluded.return_value = False  # Don't exclude any files in tests
+        mock_client.is_excluded.return_value = False
         mock_client_class.return_value = mock_client
 
         findings = [
@@ -459,7 +458,7 @@ class TestMainFunction:
 
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_code_review.return_value = (True, "", {'findings': findings})
+        _mock_multiphase_success(mock_runner, findings=findings)
         mock_runner_class.return_value = mock_runner
 
         mock_prompt_func.return_value = "prompt"
@@ -539,11 +538,7 @@ class TestAuditFailureModes:
 
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_code_review.return_value = (
-            False,
-            "Claude execution failed",
-            {}
-        )
+        mock_runner.run_prompt.return_value = (False, "Claude execution failed", {})
         mock_runner_class.return_value = mock_runner
 
         mock_filter_class.return_value = Mock()
@@ -582,6 +577,7 @@ class TestReviewTypeMetadata:
         mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
         mock_client.get_pr_diff.return_value = "diff"
         mock_client._is_excluded.return_value = False
+        mock_client.is_excluded.return_value = False
         mock_client_class.return_value = mock_client
 
         # Mixed findings - security and non-security
@@ -592,7 +588,7 @@ class TestReviewTypeMetadata:
 
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_code_review.return_value = (True, "", {'findings': findings})
+        _mock_multiphase_success(mock_runner, findings=findings)
         mock_runner_class.return_value = mock_runner
 
         # Filter passes through all findings
@@ -644,6 +640,7 @@ class TestReviewTypeMetadata:
         mock_client.get_pr_data.return_value = {'number': 123, 'title': 'Test', 'body': ''}
         mock_client.get_pr_diff.return_value = "diff"
         mock_client._is_excluded.return_value = False
+        mock_client.is_excluded.return_value = False
         mock_client_class.return_value = mock_client
 
         # Finding already has review_type set (e.g., from a custom analyzer)
@@ -654,7 +651,7 @@ class TestReviewTypeMetadata:
 
         mock_runner = Mock()
         mock_runner.validate_claude_available.return_value = (True, "")
-        mock_runner.run_code_review.return_value = (True, "", {'findings': findings})
+        _mock_multiphase_success(mock_runner, findings=findings)
         mock_runner_class.return_value = mock_runner
 
         mock_filter = Mock()

@@ -63,16 +63,11 @@ class ReviewOrchestrator:
         self.max_diff_lines = max(0, max_diff_lines)
 
     def _run_phase(self, repo_dir: Path, prompt: str, model: str, phase_name: str) -> Tuple[bool, Dict[str, Any], str]:
-        raw_result = None
-        supports_run_prompt = callable(getattr(type(self.claude_runner), "run_prompt", None))
-        if supports_run_prompt:
-            raw_result = self.claude_runner.run_prompt(repo_dir, prompt, model=model)
-        elif hasattr(self.claude_runner, "run_code_review"):
-            try:
-                raw_result = self.claude_runner.run_code_review(repo_dir, prompt, model=model)
-            except TypeError:
-                # Backward compatibility for legacy mocks/runners that don't accept model parameter.
-                raw_result = self.claude_runner.run_code_review(repo_dir, prompt)
+        run_prompt = getattr(self.claude_runner, "run_prompt", None)
+        if not callable(run_prompt):
+            return False, {}, f"Runner missing run_prompt for {phase_name}"
+
+        raw_result = run_prompt(repo_dir, prompt, model=model)
         if not (isinstance(raw_result, tuple) and len(raw_result) == 3):
             return False, {}, f"Invalid runner response for {phase_name}"
 
@@ -128,44 +123,8 @@ class ReviewOrchestrator:
         if not ok:
             return False, {}, f"Triage phase failed: {err}"
 
-        # Backward-compatible fast path for legacy single-pass outputs.
-        if isinstance(triage_result, dict) and "findings" in triage_result:
-            original_count = len([f for f in triage_result.get("findings", []) if isinstance(f, dict)])
-            legacy_findings = []
-            for finding in triage_result.get("findings", []):
-                if isinstance(finding, dict) and not self._is_excluded(finding.get("file", "")):
-                    legacy_findings.append(self._ensure_review_type(finding))
-            pr_context = {
-                "repo_name": pr_data.get("head", {}).get("repo", {}).get("full_name", "unknown"),
-                "pr_number": pr_data.get("number"),
-                "title": pr_data.get("title", ""),
-                "description": pr_data.get("body", ""),
-            }
-            filter_response = self.findings_filter.filter_findings(legacy_findings, pr_context)
-            if isinstance(filter_response, tuple) and len(filter_response) == 3:
-                filter_success, filter_results, _ = filter_response
-                if filter_success and isinstance(filter_results, dict):
-                    legacy_findings = filter_results.get("filtered_findings", legacy_findings)
-            legacy_findings = [self._ensure_review_type(f) for f in legacy_findings if isinstance(f, dict)]
-            high = len([f for f in legacy_findings if str(f.get("severity", "")).upper() == "HIGH"])
-            medium = len([f for f in legacy_findings if str(f.get("severity", "")).upper() == "MEDIUM"])
-            low = len([f for f in legacy_findings if str(f.get("severity", "")).upper() == "LOW"])
-            return True, {
-                "findings": legacy_findings,
-                "analysis_summary": {
-                    "files_reviewed": triage_result.get("analysis_summary", {}).get("files_reviewed", pr_data.get("changed_files", 0)),
-                    "high_severity": high,
-                    "medium_severity": medium,
-                    "low_severity": low,
-                    "review_completed": True,
-                },
-                "filtering_summary": {
-                    "total_original_findings": original_count,
-                    "excluded_findings": max(0, original_count - len(legacy_findings)),
-                    "kept_findings": len(legacy_findings),
-                },
-                "triage": {"skip_review": False, "reason": "legacy_single_pass", "risk_level": "medium"},
-            }, ""
+        if not isinstance(triage_result, dict) or "skip_review" not in triage_result:
+            return False, {}, "Triage phase returned invalid schema"
 
         if triage_result.get("skip_review") is True:
             logger.info("Skipping review based on triage decision: %s", triage_result.get("reason", ""))

@@ -13,6 +13,31 @@ from pathlib import Path
 from claudecode.github_action_audit import main
 
 
+def _mock_claude_result(payload):
+    """Build a mocked subprocess result containing JSON payload."""
+    return Mock(returncode=0, stdout=json.dumps(payload), stderr='')
+
+
+def _multiphase_run_side_effect(findings):
+    """Create subprocess.run side effects for strict multi-phase flow."""
+    return [
+        Mock(returncode=0, stdout='claude version 1.0.0', stderr=''),  # claude --version
+        _mock_claude_result({"skip_review": False, "reason": "", "risk_level": "medium"}),  # triage
+        _mock_claude_result({"claude_md_files": [], "change_summary": "", "hotspots": [], "priority_files": []}),  # context
+        _mock_claude_result({"findings": findings}),  # compliance
+        _mock_claude_result({"findings": []}),  # quality
+        _mock_claude_result({"findings": []}),  # security
+        _mock_claude_result(
+            {
+                "validated_findings": [
+                    {"finding_index": idx, "keep": True, "confidence": 0.95, "reason": "valid"}
+                    for idx in range(len(findings))
+                ]
+            }
+        ),  # validation
+    ]
+
+
 class TestFullWorkflowIntegration:
     """Test complete workflow scenarios."""
     
@@ -242,23 +267,7 @@ index 8901234..5678901 100644
             ]
         }
         
-        # Mock Claude CLI
-        version_result = Mock()
-        version_result.returncode = 0
-        version_result.stdout = 'claude version 1.0.0'
-        version_result.stderr = ''
-        
-        audit_result = Mock()
-        audit_result.returncode = 0
-        # Claude wraps the result in a specific format
-        claude_wrapped_response = {
-            'result': json.dumps(claude_response)
-        }
-        audit_result.stdout = json.dumps(claude_wrapped_response)
-        audit_result.stderr = ''
-        
-        # Provide results for unified review (single pass)
-        mock_run.side_effect = [version_result, audit_result]
+        mock_run.side_effect = _multiphase_run_side_effect(claude_response["findings"])
         
         # Run the workflow
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -281,10 +290,10 @@ index 8901234..5678901 100644
         # Verify API calls
         # 5 calls: PR data, files, diff, comments, reactions for bot comment
         assert mock_get.call_count == 5
-        assert mock_run.call_count == 2  # 1 version check + 1 unified review
+        assert mock_run.call_count == 7  # 1 version check + 6 phase calls
         
         # Verify the audit was run with proper prompt
-        audit_call = mock_run.call_args_list[1]
+        audit_call = mock_run.call_args_list[1]  # triage prompt
         prompt = audit_call[1]['input']
         assert 'Add new authentication feature' in prompt  # Title
         assert 'src/auth/oauth2.py' in prompt  # File name
@@ -337,11 +346,7 @@ index 8901234..5678901 100644
             }
         ]
         
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout='claude version 1.0.0', stderr=''),
-            Mock(returncode=0, stdout=json.dumps({"findings": claude_findings}), stderr=''),
-            Mock(returncode=0, stdout=json.dumps({"findings": []}), stderr='')
-        ]
+        mock_run.side_effect = _multiphase_run_side_effect(claude_findings)
         
         with tempfile.TemporaryDirectory() as tmpdir:
             os.chdir(tmpdir)
@@ -415,11 +420,7 @@ index 8901234..5678901 100644
         mock_get.side_effect = [pr_response, files_response, diff_response]
         
         # Claude finds no issues
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout='claude version 1.0.0', stderr=''),
-            Mock(returncode=0, stdout='{"findings": [], "analysis_summary": {"review_completed": true}}', stderr=''),
-            Mock(returncode=0, stdout='{"findings": [], "analysis_summary": {"review_completed": true}}', stderr='')
-        ]
+        mock_run.side_effect = _multiphase_run_side_effect([])
         
         with tempfile.TemporaryDirectory() as tmpdir:
             os.chdir(tmpdir)
@@ -506,11 +507,7 @@ index 0000000..1234567
         mock_get.side_effect = [pr_response, files_response, diff_response]
         
         # Claude handles it gracefully
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout='claude version 1.0.0', stderr=''),
-            Mock(returncode=0, stdout='{"findings": []}', stderr=''),
-            Mock(returncode=0, stdout='{"findings": []}', stderr='')
-        ]
+        mock_run.side_effect = _multiphase_run_side_effect([])
         
         with tempfile.TemporaryDirectory() as tmpdir:
             os.chdir(tmpdir)
@@ -586,11 +583,7 @@ index 1234567..8901234 100644
         
         mock_get.side_effect = [pr_response, files_response, diff_response]
         
-        mock_run.side_effect = [
-            Mock(returncode=0, stdout='claude version 1.0.0', stderr=''),
-            Mock(returncode=0, stdout='{"findings": []}', stderr=''),
-            Mock(returncode=0, stdout='{"findings": []}', stderr='')
-        ]
+        mock_run.side_effect = _multiphase_run_side_effect([])
         
         with tempfile.TemporaryDirectory() as tmpdir:
             os.chdir(tmpdir)
