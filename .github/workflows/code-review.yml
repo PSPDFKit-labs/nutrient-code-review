@@ -29,3 +29,4 @@ jobs:
           comment-pr: true
           upload-results: true
           claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          trigger-on-commit: true
