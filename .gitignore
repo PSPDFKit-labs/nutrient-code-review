@@ -1,11 +1,22 @@
+# OS-generated files
+.DS_Store
+Thumbs.db
+
 # Cache directories
 .cache/
+.pytest_cache/
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
+.python-version
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Output files
 *.csv
@@ -22,3 +33,16 @@ claudecode/claudecode-prompt.txt
 eval_results/
 
 .env
+.env.*
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node / Bun
+node_modules/
+
+# Logs
+*.log
