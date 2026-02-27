@@ -109,7 +109,7 @@ inputs:
     default: 'true'
 
   trigger-on-slash-command:
-    description: 'Run review when /review is used in a PR comment'
+    description: 'Run review when "review" is used in a PR comment'
     required: false
     default: 'true'
 
@@ -270,10 +270,10 @@ runs:
               ;;
           esac
         elif [ "$EVENT_NAME" == "issue_comment" ]; then
-          # Check if comment uses slash command trigger
-          if echo "$COMMENT_BODY" | grep -qiE '^[[:space:]]*/review([[:space:]]|$)'; then
+          # Check if comment uses review command trigger
+          if echo "$COMMENT_BODY" | grep -qiE '^[[:space:]]*review([[:space:]]|$)'; then
             TRIGGER_TYPE="slash_command"
-            echo "Detected /review slash command in comment"
+            echo "Detected review command in comment"
           fi
 
           # Check if comment mentions this specific bot
