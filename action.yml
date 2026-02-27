@@ -108,7 +108,7 @@ inputs:
     required: false
     default: 'true'
 
-  trigger-on-slash-command:
+  trigger-on-review-command:
     description: 'Run review when "review" is used in a PR comment'
     required: false
     default: 'true'
@@ -302,7 +302,7 @@ runs:
         TRIGGER_ON_COMMIT: ${{ inputs.trigger-on-commit }}
         TRIGGER_ON_REVIEW_REQUEST: ${{ inputs.trigger-on-review-request }}
         TRIGGER_ON_MENTION: ${{ inputs.trigger-on-mention }}
-        TRIGGER_ON_SLASH_COMMAND: ${{ inputs.trigger-on-slash-command }}
+        TRIGGER_ON_REVIEW_COMMAND: ${{ inputs.trigger-on-review-command }}
         TRIGGER_ON_READY_FOR_REVIEW: ${{ inputs.trigger-on-ready-for-review }}
         SKIP_DRAFT_PRS: ${{ inputs.skip-draft-prs }}
         IS_DRAFT: ${{ github.event.pull_request.draft || steps.pr-info.outputs.is_draft }}
@@ -607,7 +607,7 @@ runs:
           "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
           -X POST \
           -H "Accept: application/vnd.github+json" \
-          -f content='+1' >/dev/null 2>&1 || \
+          -f content='rocket' >/dev/null 2>&1 || \
           echo "::warning::Unable to add completion reaction to slash command comment"
 
 branding:

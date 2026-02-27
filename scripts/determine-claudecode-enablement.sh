@@ -12,7 +12,7 @@
 #   - TRIGGER_ON_COMMIT: Whether to run on new commits (true/false)
 #   - TRIGGER_ON_REVIEW_REQUEST: Whether to run on review requests (true/false)
 #   - TRIGGER_ON_MENTION: Whether to run on bot mentions (true/false)
-#   - TRIGGER_ON_SLASH_COMMAND: Whether to run on /review slash command (true/false)
+#   - TRIGGER_ON_REVIEW_COMMAND: Whether to run on review command comments (true/false)
 #   - TRIGGER_ON_READY_FOR_REVIEW: Whether to run when draft PR is marked ready (true/false)
 #   - RUN_EVERY_COMMIT: Legacy flag for running on commits (true/false)
 #   - SKIP_DRAFT_PRS: Whether to skip draft PRs (true/false)
@@ -81,8 +81,8 @@ if [ "$ENABLE_CLAUDECODE" == "true" ]; then
       fi
       ;;
     slash_command)
-      if [ "${TRIGGER_ON_SLASH_COMMAND:-true}" != "true" ]; then
-        echo "Trigger 'slash_command' is disabled via trigger-on-slash-command input"
+      if [ "${TRIGGER_ON_REVIEW_COMMAND:-true}" != "true" ]; then
+        echo "Trigger 'slash_command' is disabled via trigger-on-review-command input"
         ENABLE_CLAUDECODE="false"
       fi
       ;;
