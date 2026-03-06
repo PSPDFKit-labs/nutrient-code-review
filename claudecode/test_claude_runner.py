@@ -9,6 +9,8 @@ import subprocess
 from unittest.mock import Mock, patch
 from pathlib import Path
 
+import pytest
+
 from claudecode.github_action_audit import SimpleClaudeRunner
 from claudecode.constants import DEFAULT_CLAUDE_MODEL
 
@@ -179,7 +181,14 @@ class TestSimpleClaudeRunner:
         """Test warning for large prompts."""
         mock_run.return_value = Mock(
             returncode=0,
-            stdout='{"findings": []}',
+            stdout=json.dumps({
+                "type": "result",
+                "subtype": "success",
+                "structured_output": {
+                    "pr_summary": {"overview": "Large prompt test", "file_changes": []},
+                    "findings": [],
+                },
+            }),
             stderr=''
         )
         
@@ -203,7 +212,18 @@ class TestSimpleClaudeRunner:
         # First call fails, second succeeds
         mock_run.side_effect = [
             Mock(returncode=1, stdout='', stderr='Temporary error'),
-            Mock(returncode=0, stdout='{"findings": []}', stderr='')
+            Mock(
+                returncode=0,
+                stdout=json.dumps({
+                    "type": "result",
+                    "subtype": "success",
+                    "structured_output": {
+                        "pr_summary": {"overview": "Retry test", "file_changes": []},
+                        "findings": [],
+                    },
+                }),
+                stderr='',
+            )
         ]
         
         runner = SimpleClaudeRunner()
@@ -304,6 +324,24 @@ class TestSimpleClaudeRunner:
         result = runner._extract_review_findings(claude_output)
         assert len(result['findings']) == 1
         assert result['findings'][0]['file'] == 'test.py'
+
+    def test_extract_review_findings_structured_output_wrapper(self):
+        """Test extraction from structured_output when result is empty."""
+        runner = SimpleClaudeRunner()
+
+        claude_output = {
+            "result": "",
+            "structured_output": {
+                "pr_summary": {"overview": "Test", "file_changes": []},
+                "findings": [
+                    {"file": "test.py", "line": 10, "severity": "HIGH"}
+                ],
+            },
+        }
+
+        result = runner._extract_review_findings(claude_output)
+        assert len(result["findings"]) == 1
+        assert result["pr_summary"]["overview"] == "Test"
     
     def test_extract_review_findings_direct_format(self):
         """Test that direct findings format was removed - only wrapped format is supported."""
@@ -320,10 +358,8 @@ class TestSimpleClaudeRunner:
             }
         }
 
-        result = runner._extract_review_findings(claude_output)
-        # Should return empty structure since direct format is not supported
-        assert len(result['findings']) == 0
-        assert result['pr_summary'] == {}
+        with pytest.raises(ValueError, match="valid review payload"):
+            runner._extract_review_findings(claude_output)
     
     def test_extract_review_findings_text_fallback(self):
         """Test that text fallback was removed - only JSON is supported."""
@@ -334,20 +370,16 @@ class TestSimpleClaudeRunner:
             "result": "Found SQL injection vulnerability in database.py line 45"
         }
 
-        # Should return empty findings since we don't parse text anymore
-        result = runner._extract_review_findings(claude_output)
-        assert len(result['findings']) == 0
-        assert result['pr_summary'] == {}
+        with pytest.raises(ValueError, match="valid review payload"):
+            runner._extract_review_findings(claude_output)
     
     def test_extract_review_findings_empty(self):
         """Test extraction with no findings."""
         runner = SimpleClaudeRunner()
 
-        # Various empty formats
         for output in [None, {}, {"result": ""}, {"other": "data"}]:
-            result = runner._extract_review_findings(output)
-            assert result['findings'] == []
-            assert result['pr_summary'] == {}
+            with pytest.raises(ValueError):
+                runner._extract_review_findings(output)
     
     def test_create_findings_from_text(self):
         """Test that _create_findings_from_text was removed."""

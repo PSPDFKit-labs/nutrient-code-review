@@ -577,7 +577,13 @@ class SimpleClaudeRunner:
 
                     # If returncode is 0, extract review findings
                     if result.returncode == 0:
-                        parsed_results = self._extract_review_findings(parsed_result)
+                        try:
+                            parsed_results = self._extract_review_findings(parsed_result)
+                        except ValueError as error:
+                            if attempt == NUM_RETRIES - 1:
+                                return False, str(error), {}
+                            time.sleep(5 * attempt)
+                            continue
                         return True, "", parsed_results
 
                 # Handle non-zero return codes after parsing
@@ -607,22 +613,28 @@ class SimpleClaudeRunner:
     
     def _extract_review_findings(self, claude_output: Any) -> Dict[str, Any]:
         """Extract review findings and PR summary from Claude's JSON response."""
-        if isinstance(claude_output, dict):
-            # Only accept Claude Code wrapper with result field
-            # Direct format without wrapper is not supported
-            if 'result' in claude_output:
-                result_text = claude_output['result']
-                if isinstance(result_text, str):
-                    # Try to extract JSON from the result text
-                    success, result_json = parse_json_with_fallbacks(result_text, "Claude result text")
-                    if success and result_json and 'findings' in result_json and 'pr_summary' in result_json:
-                        return result_json
+        if not isinstance(claude_output, dict):
+            raise ValueError("Claude did not return a JSON object")
 
-        # Return empty structure if no findings found
-        return {
-            'findings': [],
-            'pr_summary': {}
-        }
+        structured_output = claude_output.get('structured_output')
+        if (
+            isinstance(structured_output, dict)
+            and 'findings' in structured_output
+            and 'pr_summary' in structured_output
+        ):
+            return structured_output
+
+        # Fall back to the older wrapper shape where the JSON payload
+        # is serialized into the result field.
+        result_text = claude_output.get('result')
+        if isinstance(result_text, str):
+            success, result_json = parse_json_with_fallbacks(result_text, "Claude result text")
+            if success and result_json and 'findings' in result_json and 'pr_summary' in result_json:
+                return result_json
+
+        raise ValueError(
+            "Claude did not return a valid review payload in structured_output or result"
+        )
 
     def validate_claude_available(self) -> Tuple[bool, str]:
         """Validate that Claude Code is available."""
