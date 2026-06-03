@@ -75,8 +75,8 @@ inputs:
       ~200k tokens). Larger diffs use agentic file reading instead. Set to 0 to
       always use agentic mode.
 
-      Note: 800k chars fits comfortably in the default Opus 4.7 model (1M
-      context). To embed even larger diffs, raise this value — both Opus 4.7
+      Note: 800k chars fits comfortably in the default Opus 4.8 model (1M
+      context). To embed even larger diffs, raise this value — both Opus 4.8
       and Sonnet 4.6 have 1M context.
     required: false
     default: '800000'
