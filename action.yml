@@ -270,8 +270,10 @@ runs:
               ;;
           esac
         elif [ "$EVENT_NAME" == "issue_comment" ]; then
-          # Check if comment uses review command trigger
-          if echo "$COMMENT_BODY" | grep -qiE '^[[:space:]]*review([[:space:]]|$)'; then
+          # Check if comment uses review command trigger (the whole comment must be
+          # just "review" or "review please" - not merely start with the word, so
+          # ordinary conversation like "review the design doc" doesn't trigger a run)
+          if echo "$COMMENT_BODY" | grep -qiE '^[[:space:]]*review([[:space:]]+please)?[[:space:]]*$'; then
             TRIGGER_TYPE="slash_command"
             echo "Detected review command in comment"
           fi

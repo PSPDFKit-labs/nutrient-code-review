@@ -121,7 +121,7 @@ This action is not hardened against prompt injection attacks and should only be 
 | `trigger-on-commit` | Run review on every new commit | `false` | No |
 | `trigger-on-review-request` | Run review when someone requests a review from the bot | `true` | No |
 | `trigger-on-mention` | Run review when bot is mentioned in a PR comment | `true` | No |
-| `trigger-on-review-command` | Run review when a PR comment starts with the plain word `review` (no bot mention needed) | `true` | No |
+| `trigger-on-review-command` | Run review when a PR comment is exactly `review` or `review please` (no bot mention needed) | `true` | No |
 | `trigger-on-ready-for-review` | Run review when a draft PR is marked ready for review | `true` | No |
 | `enable-heuristic-filtering` | Use pattern-based heuristic rules to filter common false positives (e.g., stylistic issues, low-signal security warnings) | `true` | No |
 | `enable-claude-filtering` | Use Claude API to validate and filter findings. This reduces false positives but increases API costs by making additional validation calls to Claude. | `false` | No |
@@ -219,7 +219,7 @@ The bot will **not** automatically re-review on new commits unless configured to
 | **New Commit** | `trigger-on-commit` | `false` | Run review automatically on every new commit to the PR |
 | **Review Request** | `trigger-on-review-request` | `true` | Run review when someone requests a review from the bot via GitHub's UI |
 | **Bot Mention** | `trigger-on-mention` | `true` | Run review when the bot is mentioned in a PR comment. The bot automatically detects its own identity (e.g., `@github-actions` for default token, or custom app name). |
-| **Review Command** | `trigger-on-review-command` | `true` | Run review when a PR comment starts with the plain word `review` (e.g. `review`, `review please`) - no bot mention needed. |
+| **Review Command** | `trigger-on-review-command` | `true` | Run review when a PR comment is exactly `review` or `review please` (case-insensitive, surrounding whitespace ignored) - no bot mention needed. Ordinary comments that merely start with "review" (e.g. "review the design doc") do not trigger it. |
 
 #### Draft PRs
 
