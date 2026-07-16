@@ -35,6 +35,7 @@ teardown_test() {
     # Unset all environment variables that tests might set
     unset GITHUB_EVENT_NAME PR_NUMBER GITHUB_SHA TRIGGER_TYPE
     unset TRIGGER_ON_OPEN TRIGGER_ON_COMMIT TRIGGER_ON_REVIEW_REQUEST TRIGGER_ON_MENTION
+    unset TRIGGER_ON_REVIEW_COMMAND TRIGGER_ON_READY_FOR_REVIEW
     unset RUN_EVERY_COMMIT SKIP_DRAFT_PRS IS_DRAFT REQUIRE_LABEL PR_LABELS IS_PR
 }
 
@@ -368,6 +369,135 @@ test_skip_draft_prs_disabled() {
     teardown_test
 }
 
+test_ready_for_review_trigger() {
+    echo "Test: Ready-for-review trigger enabled"
+    setup_test
+
+    export GITHUB_EVENT_NAME="pull_request"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="ready_for_review"
+    export TRIGGER_ON_READY_FOR_REVIEW="true"
+
+    run_script
+
+    assert_equals "true" "$ENABLE_CLAUDECODE" "Should enable for ready-for-review trigger"
+
+    teardown_test
+}
+
+test_ready_for_review_trigger_disabled() {
+    echo "Test: Ready-for-review trigger disabled via input"
+    setup_test
+
+    export GITHUB_EVENT_NAME="pull_request"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="ready_for_review"
+    export TRIGGER_ON_READY_FOR_REVIEW="false"
+
+    run_script
+
+    assert_equals "false" "$ENABLE_CLAUDECODE" "Should disable when ready-for-review trigger is off"
+
+    teardown_test
+}
+
+test_slash_command_trigger() {
+    echo "Test: Review comment command trigger enabled"
+    setup_test
+
+    export GITHUB_EVENT_NAME="issue_comment"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="slash_command"
+    export TRIGGER_ON_REVIEW_COMMAND="true"
+    export IS_PR="true"
+
+    run_script
+
+    assert_equals "true" "$ENABLE_CLAUDECODE" "Should enable for review comment command trigger"
+
+    teardown_test
+}
+
+test_slash_command_trigger_disabled() {
+    echo "Test: Review comment command trigger disabled via input"
+    setup_test
+
+    export GITHUB_EVENT_NAME="issue_comment"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="slash_command"
+    export TRIGGER_ON_REVIEW_COMMAND="false"
+    export IS_PR="true"
+
+    run_script
+
+    assert_equals "false" "$ENABLE_CLAUDECODE" "Should disable when review comment command trigger is off"
+
+    teardown_test
+}
+
+test_skip_draft_prs_mention_bypasses() {
+    echo "Test: Skip draft PRs does not apply to bot mention trigger"
+    setup_test
+
+    export GITHUB_EVENT_NAME="issue_comment"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="mention"
+    export TRIGGER_ON_MENTION="true"
+    export IS_PR="true"
+    export SKIP_DRAFT_PRS="true"
+    export IS_DRAFT="true"
+
+    run_script
+
+    assert_equals "true" "$ENABLE_CLAUDECODE" "Should enable a mention-triggered review on a draft PR despite skip-draft-prs"
+
+    teardown_test
+}
+
+test_skip_draft_prs_slash_command_bypasses() {
+    echo "Test: Skip draft PRs does not apply to review comment command trigger"
+    setup_test
+
+    export GITHUB_EVENT_NAME="issue_comment"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="slash_command"
+    export TRIGGER_ON_REVIEW_COMMAND="true"
+    export IS_PR="true"
+    export SKIP_DRAFT_PRS="true"
+    export IS_DRAFT="true"
+
+    run_script
+
+    assert_equals "true" "$ENABLE_CLAUDECODE" "Should enable a review-command-triggered review on a draft PR despite skip-draft-prs"
+
+    teardown_test
+}
+
+test_skip_draft_prs_commit_still_skipped() {
+    echo "Test: Skip draft PRs still applies to automatic commit trigger"
+    setup_test
+
+    export GITHUB_EVENT_NAME="pull_request"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="commit"
+    export TRIGGER_ON_COMMIT="true"
+    export SKIP_DRAFT_PRS="true"
+    export IS_DRAFT="true"
+
+    run_script
+
+    assert_equals "false" "$ENABLE_CLAUDECODE" "Should still skip an automatic commit-triggered review on a draft PR"
+
+    teardown_test
+}
+
 test_issue_comment_not_on_pr() {
     echo "Test: Issue comment not on a PR"
     setup_test
@@ -457,6 +587,13 @@ test_commit_trigger_with_legacy_input
 test_commit_trigger_disabled
 test_review_request_trigger
 test_mention_trigger
+test_ready_for_review_trigger
+test_ready_for_review_trigger_disabled
+test_slash_command_trigger
+test_slash_command_trigger_disabled
+test_skip_draft_prs_mention_bypasses
+test_skip_draft_prs_slash_command_bypasses
+test_skip_draft_prs_commit_still_skipped
 test_sha_deduplication_different_sha
 test_sha_deduplication_same_sha_non_review
 test_sha_deduplication_same_sha_review_request

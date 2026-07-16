@@ -55,7 +55,7 @@ inputs:
     default: ''
 
   skip-draft-prs:
-    description: 'Skip code review on draft pull requests'
+    description: 'Skip code review on draft pull requests. Does not apply to a review explicitly requested via a bot mention or the review comment command - those always run, even on drafts.'
     required: false
     default: 'true'
 
@@ -105,6 +105,16 @@ inputs:
 
   trigger-on-mention:
     description: 'Run review when bot is mentioned in a PR comment'
+    required: false
+    default: 'true'
+
+  trigger-on-review-command:
+    description: 'Run review when "review" is used in a PR comment'
+    required: false
+    default: 'true'
+
+  trigger-on-ready-for-review:
+    description: 'Run review when a draft PR is marked ready for review'
     required: false
     default: 'true'
 
@@ -239,37 +249,8 @@ runs:
         COMMENT_BODY: ${{ github.event.comment.body }}
         APP_SLUG: ${{ inputs.app-slug }}
       run: |
-        TRIGGER_TYPE="unknown"
-
-        if [ "$EVENT_NAME" == "pull_request" ]; then
-          case "$EVENT_ACTION" in
-            opened|reopened|ready_for_review)
-              TRIGGER_TYPE="open"
-              ;;
-            synchronize)
-              TRIGGER_TYPE="commit"
-              ;;
-            review_requested)
-              TRIGGER_TYPE="review_request"
-              ;;
-            labeled)
-              TRIGGER_TYPE="label"
-              ;;
-          esac
-        elif [ "$EVENT_NAME" == "issue_comment" ]; then
-          # Check if comment mentions this specific bot
-          # Escape special regex characters in bot login to prevent regex injection
-          if [ -n "$APP_SLUG" ]; then
-            ESCAPED_BOT=$(printf '%s\n' "$APP_SLUG" | sed 's/[]\/$*.^[]/\\&/g')
-            if echo "$COMMENT_BODY" | grep -qE "@${ESCAPED_BOT}\\b"; then
-              TRIGGER_TYPE="mention"
-              echo "Detected mention of @$APP_SLUG in comment"
-            fi
-          fi
-        fi
-
-        echo "trigger_type=$TRIGGER_TYPE" >> $GITHUB_OUTPUT
-        echo "Detected trigger type: $TRIGGER_TYPE"
+        # See scripts/detect-trigger-type.sh for implementation details
+        "${{ github.action_path }}/scripts/detect-trigger-type.sh"
 
     - name: Determine ClaudeCode enablement
       id: claudecode-check
@@ -283,6 +264,8 @@ runs:
         TRIGGER_ON_COMMIT: ${{ inputs.trigger-on-commit }}
         TRIGGER_ON_REVIEW_REQUEST: ${{ inputs.trigger-on-review-request }}
         TRIGGER_ON_MENTION: ${{ inputs.trigger-on-mention }}
+        TRIGGER_ON_REVIEW_COMMAND: ${{ inputs.trigger-on-review-command }}
+        TRIGGER_ON_READY_FOR_REVIEW: ${{ inputs.trigger-on-ready-for-review }}
         SKIP_DRAFT_PRS: ${{ inputs.skip-draft-prs }}
         IS_DRAFT: ${{ github.event.pull_request.draft || steps.pr-info.outputs.is_draft }}
         REQUIRE_LABEL: ${{ inputs.require-label }}
@@ -294,6 +277,19 @@ runs:
         # This script encapsulates the complex logic for deciding when to run code reviews
         # See scripts/determine-claudecode-enablement.sh for implementation details
         "${{ github.action_path }}/scripts/determine-claudecode-enablement.sh"
+
+    - name: Add eyes reaction for /review command
+      if: github.event_name == 'issue_comment' && steps.trigger-detection.outputs.trigger_type == 'slash_command' && steps.claudecode-check.outputs.enable_claudecode == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
+      run: |
+        gh api \
+          "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -f content='eyes' >/dev/null 2>&1 || \
+          echo "::warning::Unable to add eyes reaction to slash command comment"
 
     - name: Reserve ClaudeCode slot to prevent race conditions
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
@@ -562,6 +558,19 @@ runs:
         REVIEW_MODE: ${{ inputs.review-mode }}
       run: |
         node "$ACTION_PATH/scripts/comment-pr-findings.js"
+
+    - name: Add completion reaction for /review command
+      if: success() && github.event_name == 'issue_comment' && steps.trigger-detection.outputs.trigger_type == 'slash_command' && steps.claudecode-check.outputs.enable_claudecode == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
+      run: |
+        gh api \
+          "repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+          -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -f content='rocket' >/dev/null 2>&1 || \
+          echo "::warning::Unable to add completion reaction to slash command comment"
 
 branding:
   icon: 'shield'

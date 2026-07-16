@@ -7,11 +7,13 @@
 #   - GITHUB_EVENT_NAME: The GitHub event name (pull_request, issue_comment, etc.)
 #   - PR_NUMBER: The pull request number
 #   - GITHUB_SHA: The commit SHA being reviewed
-#   - TRIGGER_TYPE: The detected trigger type (open, commit, review_request, mention, label)
+#   - TRIGGER_TYPE: The detected trigger type (open, ready_for_review, commit, review_request, mention, slash_command, label)
 #   - TRIGGER_ON_OPEN: Whether to run on PR open (true/false)
 #   - TRIGGER_ON_COMMIT: Whether to run on new commits (true/false)
 #   - TRIGGER_ON_REVIEW_REQUEST: Whether to run on review requests (true/false)
 #   - TRIGGER_ON_MENTION: Whether to run on bot mentions (true/false)
+#   - TRIGGER_ON_REVIEW_COMMAND: Whether to run on review command comments (true/false)
+#   - TRIGGER_ON_READY_FOR_REVIEW: Whether to run when draft PR is marked ready (true/false)
 #   - RUN_EVERY_COMMIT: Legacy flag for running on commits (true/false)
 #   - SKIP_DRAFT_PRS: Whether to skip draft PRs (true/false)
 #   - IS_DRAFT: Whether the PR is a draft (true/false)
@@ -53,6 +55,12 @@ if [ "$ENABLE_CLAUDECODE" == "true" ]; then
         ENABLE_CLAUDECODE="false"
       fi
       ;;
+    ready_for_review)
+      if [ "${TRIGGER_ON_READY_FOR_REVIEW:-true}" != "true" ]; then
+        echo "Trigger 'ready_for_review' is disabled via trigger-on-ready-for-review input"
+        ENABLE_CLAUDECODE="false"
+      fi
+      ;;
     commit)
       # Check both new and legacy input names (run-every-commit is alias for trigger-on-commit)
       if [ "${TRIGGER_ON_COMMIT:-false}" != "true" ] && [ "${RUN_EVERY_COMMIT:-false}" != "true" ]; then
@@ -69,6 +77,12 @@ if [ "$ENABLE_CLAUDECODE" == "true" ]; then
     mention)
       if [ "${TRIGGER_ON_MENTION:-true}" != "true" ]; then
         echo "Trigger 'mention' is disabled via trigger-on-mention input"
+        ENABLE_CLAUDECODE="false"
+      fi
+      ;;
+    slash_command)
+      if [ "${TRIGGER_ON_REVIEW_COMMAND:-true}" != "true" ]; then
+        echo "Trigger 'slash_command' is disabled via trigger-on-review-command input"
         ENABLE_CLAUDECODE="false"
       fi
       ;;
@@ -107,10 +121,17 @@ if [ "$ENABLE_CLAUDECODE" == "true" ] && [ -n "${REQUIRE_LABEL:-}" ]; then
   fi
 fi
 
-# 4. Skip draft PRs if configured
+# 4. Skip draft PRs if configured (explicit comment-driven triggers bypass this)
 if [ "$ENABLE_CLAUDECODE" == "true" ] && [ "${SKIP_DRAFT_PRS:-false}" == "true" ] && [ "${IS_DRAFT:-false}" == "true" ]; then
-  echo "Skipping code review for draft PR #$PR_NUMBER"
-  ENABLE_CLAUDECODE="false"
+  case "$TRIGGER_TYPE" in
+    mention|slash_command)
+      echo "Draft PR #$PR_NUMBER, but trigger '$TRIGGER_TYPE' was explicitly requested via comment - running anyway"
+      ;;
+    *)
+      echo "Skipping code review for draft PR #$PR_NUMBER"
+      ENABLE_CLAUDECODE="false"
+      ;;
+  esac
 fi
 
 # 5. Final status
