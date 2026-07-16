@@ -121,10 +121,17 @@ if [ "$ENABLE_CLAUDECODE" == "true" ] && [ -n "${REQUIRE_LABEL:-}" ]; then
   fi
 fi
 
-# 4. Skip draft PRs if configured
+# 4. Skip draft PRs if configured (explicit comment-driven triggers bypass this)
 if [ "$ENABLE_CLAUDECODE" == "true" ] && [ "${SKIP_DRAFT_PRS:-false}" == "true" ] && [ "${IS_DRAFT:-false}" == "true" ]; then
-  echo "Skipping code review for draft PR #$PR_NUMBER"
-  ENABLE_CLAUDECODE="false"
+  case "$TRIGGER_TYPE" in
+    mention|slash_command)
+      echo "Draft PR #$PR_NUMBER, but trigger '$TRIGGER_TYPE' was explicitly requested via comment - running anyway"
+      ;;
+    *)
+      echo "Skipping code review for draft PR #$PR_NUMBER"
+      ENABLE_CLAUDECODE="false"
+      ;;
+  esac
 fi
 
 # 5. Final status

@@ -55,7 +55,7 @@ inputs:
     default: ''
 
   skip-draft-prs:
-    description: 'Skip code review on draft pull requests'
+    description: 'Skip code review on draft pull requests. Does not apply to a review explicitly requested via a bot mention or the review comment command - those always run, even on drafts.'
     required: false
     default: 'true'
 

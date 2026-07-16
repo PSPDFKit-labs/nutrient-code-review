@@ -121,13 +121,15 @@ This action is not hardened against prompt injection attacks and should only be 
 | `trigger-on-commit` | Run review on every new commit | `false` | No |
 | `trigger-on-review-request` | Run review when someone requests a review from the bot | `true` | No |
 | `trigger-on-mention` | Run review when bot is mentioned in a PR comment | `true` | No |
+| `trigger-on-review-command` | Run review when a PR comment starts with the plain word `review` (no bot mention needed) | `true` | No |
+| `trigger-on-ready-for-review` | Run review when a draft PR is marked ready for review | `true` | No |
 | `enable-heuristic-filtering` | Use pattern-based heuristic rules to filter common false positives (e.g., stylistic issues, low-signal security warnings) | `true` | No |
 | `enable-claude-filtering` | Use Claude API to validate and filter findings. This reduces false positives but increases API costs by making additional validation calls to Claude. | `false` | No |
 | `false-positive-filtering-instructions` | Path to custom false positive filtering instructions text file | None | No |
 | `custom-review-instructions` | Path to custom code review instructions text file to append to the audit prompt | None | No |
 | `custom-security-scan-instructions` | Path to custom security scan instructions text file to append to the security section | None | No |
 | `dismiss-stale-reviews` | Dismiss previous bot reviews when posting a new review (useful for follow-up commits) | `true` | No |
-| `skip-draft-prs` | Skip code review on draft pull requests | `true` | No |
+| `skip-draft-prs` | Skip code review on draft pull requests. Does not apply to a review explicitly requested via a bot mention or the `review` comment command - those always run, even on drafts. | `true` | No |
 | `app-slug` | GitHub App slug for bot mention detection. If using `actions/create-github-app-token@v1.9.0+`, pass `${{ steps.app-token.outputs.app-slug }}`. Otherwise defaults to `github-actions`. | `github-actions` | No |
 | `require-label` | Only run review if this label is present. Leave empty to review all PRs. Add `labeled` to your workflow `pull_request` types to trigger on label addition. | None | No |
 
@@ -203,6 +205,8 @@ The action supports multiple triggers for when reviews should be run, allowing f
 By default, the bot reviews PRs **once** when first opened, and will re-review when:
 - Someone explicitly requests a review from the bot
 - The bot is mentioned in a PR comment
+- Someone comments `review` on the PR
+- A draft PR is marked ready for review
 
 The bot will **not** automatically re-review on new commits unless configured to do so.
 
@@ -211,9 +215,15 @@ The bot will **not** automatically re-review on new commits unless configured to
 | Trigger | Input | Default | Description |
 |---------|-------|---------|-------------|
 | **PR Open** | `trigger-on-open` | `true` | Run review when PR is first opened or reopened |
+| **Ready for Review** | `trigger-on-ready-for-review` | `true` | Run review when a draft PR is marked ready for review |
 | **New Commit** | `trigger-on-commit` | `false` | Run review automatically on every new commit to the PR |
 | **Review Request** | `trigger-on-review-request` | `true` | Run review when someone requests a review from the bot via GitHub's UI |
 | **Bot Mention** | `trigger-on-mention` | `true` | Run review when the bot is mentioned in a PR comment. The bot automatically detects its own identity (e.g., `@github-actions` for default token, or custom app name). |
+| **Review Command** | `trigger-on-review-command` | `true` | Run review when a PR comment starts with the plain word `review` (e.g. `review`, `review please`) - no bot mention needed. |
+
+#### Draft PRs
+
+Set `skip-draft-prs: true` (the default) to keep the bot quiet on drafts for the automatic triggers above (PR Open, New Commit, Ready for Review). This does **not** apply to the two comment-driven triggers - a **Bot Mention** or a plain `review` comment always runs, even while the PR is still a draft, since those are an explicit, per-PR request from a human rather than automatic noise. Marking the PR ready for review still fires the normal **Ready for Review** trigger as usual.
 
 #### Usage Examples
 
@@ -260,7 +270,7 @@ To enable all trigger types, your workflow file should include:
 ```yaml
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, review_requested]
+    types: [opened, synchronize, reopened, labeled, review_requested, ready_for_review]
   issue_comment:
     types: [created]
 ```
