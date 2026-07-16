@@ -525,6 +525,7 @@ cd scripts && npm test
 
 # Bash script tests
 ./scripts/test-determine-claudecode-enablement.sh
+./scripts/test-detect-trigger-type.sh
 ```
 
 ## Support
