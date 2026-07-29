@@ -505,7 +505,10 @@ runs:
         echo "::group::Install Deps"
         pip install -r "$ACTION_PATH/claudecode/requirements.txt"
         npm install -g @anthropic-ai/claude-code
-        sudo apt-get update && sudo apt-get install -y jq
+        # jq is pre-installed on GitHub-hosted runners - only install if missing
+        if ! command -v jq >/dev/null 2>&1; then
+          sudo apt-get update && sudo apt-get install -y jq
+        fi
         echo "::endgroup::"
 
     - name: Run ClaudeCode scan

@@ -1,12 +1,13 @@
 """Findings filter for reducing false positives in code review results."""
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Tuple, Optional, Pattern
 import time
 from dataclasses import dataclass, field
 
 from claudecode.claude_api_client import ClaudeAPIClient
-from claudecode.constants import DEFAULT_CLAUDE_MODEL
+from claudecode.constants import DEFAULT_CLAUDE_MODEL, FILTER_MAX_WORKERS
 from claudecode.logger import get_logger
 
 logger = get_logger(__name__)
@@ -168,8 +169,8 @@ class HardExclusionRules:
                 if pattern.search(combined_text):
                     return "Regex injection finding (not applicable)"
         
-        # Check memory safety patterns - exclude if NOT in C/C++ files
-        c_cpp_extensions = {'.c', '.cc', '.cpp', '.h'}
+        # Check memory safety patterns - exclude if NOT in C/C++/Objective-C files
+        c_cpp_extensions = {'.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx', '.m', '.mm'}
         file_ext = ''
         if '.' in file_path:
             file_ext = f".{file_path.lower().split('.')[-1]}"
@@ -295,15 +296,24 @@ class FindingsFilter:
         excluded_claude = []
         
         if self.use_claude_filtering and self.claude_client and findings_after_hard:
-            # Process findings individually
-            logger.info(f"Processing {len(findings_after_hard)} findings individually through Claude API")
-            
-            for orig_idx, finding in findings_after_hard:
-                # Call Claude API for single finding
-                success, analysis_result, error_msg = self.claude_client.analyze_single_finding(
+            # Process findings individually, in parallel (each analysis is an
+            # independent API call; ordering of results is preserved by map)
+            logger.info(f"Processing {len(findings_after_hard)} findings individually through Claude API "
+                        f"({FILTER_MAX_WORKERS} workers)")
+
+            def _analyze(item):
+                _, finding = item
+                return self.claude_client.analyze_single_finding(
                     finding, pr_context, self.custom_filtering_instructions
                 )
-                
+
+            max_workers = min(FILTER_MAX_WORKERS, len(findings_after_hard))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                analysis_results = list(executor.map(_analyze, findings_after_hard))
+
+            for (orig_idx, finding), (success, analysis_result, error_msg) in zip(
+                findings_after_hard, analysis_results
+            ):
                 if success and analysis_result:
                     # Process Claude's analysis for single finding
                     confidence = analysis_result.get('confidence_score', 10.0)

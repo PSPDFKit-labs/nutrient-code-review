@@ -10,6 +10,10 @@ const { spawnSync } = require('child_process');
 // PR Summary marker for identifying our summary sections
 const PR_SUMMARY_MARKER = '📋 **PR Summary:**';
 
+// Marker prefix for inline finding comments (kept in sync with
+// claudecode/format_pr_comments.py BOT_COMMENT_MARKER)
+const BOT_COMMENT_MARKER = '🤖 **Code Review Finding: ';
+
 // Review mode: 'approve-reject' (APPROVE / REQUEST_CHANGES verdict) or 'comment-only' (COMMENT, no verdict)
 const REVIEW_MODE = (process.env.REVIEW_MODE || 'approve-reject').toLowerCase();
 const COMMENT_ONLY_MODE = REVIEW_MODE === 'comment-only';
@@ -66,6 +70,57 @@ function ghApi(endpoint, method = 'GET', data = null) {
     console.error(`Error calling GitHub API: ${error.message}`);
     throw error;
   }
+}
+
+// Fetch every page of a paginated GitHub list endpoint
+function ghApiPaginated(baseEndpoint) {
+  const results = [];
+  const perPage = 100;
+  let page = 1;
+  while (true) {
+    const separator = baseEndpoint.includes('?') ? '&' : '?';
+    const batch = ghApi(`${baseEndpoint}${separator}per_page=${perPage}&page=${page}`);
+    if (!Array.isArray(batch) || batch.length === 0) {
+      break;
+    }
+    results.push(...batch);
+    if (batch.length < perPage) {
+      break;
+    }
+    page++;
+  }
+  return results;
+}
+
+// Extract the finding title from a bot comment body
+// (bodies start with "🤖 **Code Review Finding: {title}**")
+function extractFindingTitle(body) {
+  if (!body) return null;
+  const markerIndex = body.indexOf(BOT_COMMENT_MARKER);
+  if (markerIndex === -1) return null;
+  const start = markerIndex + BOT_COMMENT_MARKER.length;
+  const end = body.indexOf('**', start);
+  if (end <= start) return null;
+  return body.slice(start, end).trim();
+}
+
+// Build a set of "path::title" keys for findings already posted as inline
+// comments on this PR, so re-reviews don't post duplicate threads for
+// unresolved findings (review dismissal does not remove inline comments).
+function getExistingFindingKeys() {
+  const keys = new Set();
+  try {
+    const comments = ghApiPaginated(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/comments`);
+    for (const comment of comments) {
+      const title = extractFindingTitle(comment.body);
+      if (title && comment.path) {
+        keys.add(`${comment.path}::${title}`);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to fetch existing comments for dedup:', error.message);
+  }
+  return keys;
 }
 
 // Helper function to add reactions to a comment
@@ -318,14 +373,18 @@ async function run() {
 
     let fileMap = {};
     if (!silenceClaudeCodeComments && newFindings.length > 0) {
-      // Get the PR diff to map file lines to diff positions
-      const prFiles = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/files?per_page=100`);
+      // Get the PR diff to map file lines to diff positions (paginated -
+      // PRs can have more than 100 changed files)
+      const prFiles = ghApiPaginated(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/files`);
 
       // Create a map of file paths to their diff information
       fileMap = {};
       prFiles.forEach(file => {
         fileMap[file.filename] = file;
       });
+
+      // Findings already posted as inline comments on a previous run
+      const existingFindingKeys = getExistingFindingKeys();
 
       // Process findings synchronously (gh cli doesn't support async well)
       for (const finding of newFindings) {
@@ -342,8 +401,16 @@ async function run() {
           continue;
         }
 
+        // Skip findings that already have an inline comment thread from a
+        // previous review run (dismissing a review keeps its comments, so
+        // re-posting would create duplicate threads)
+        if (existingFindingKeys.has(`${file}::${title}`)) {
+          console.log(`Finding "${title}" on ${file} already has a comment thread, skipping duplicate`);
+          continue;
+        }
+
         // Build the comment body
-        let commentBody = `🤖 **Code Review Finding: ${title}**\n\n`;
+        let commentBody = `${BOT_COMMENT_MARKER}${title}**\n\n`;
         commentBody += `**Severity:** ${severity}\n`;
         commentBody += `**Category:** ${category}\n`;
 
