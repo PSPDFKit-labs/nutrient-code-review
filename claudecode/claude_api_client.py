@@ -10,7 +10,8 @@ from anthropic import Anthropic
 
 from claudecode.constants import (
     DEFAULT_CLAUDE_MODEL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_RETRIES,
-    RATE_LIMIT_BACKOFF_MAX, PROMPT_TOKEN_LIMIT,
+    RATE_LIMIT_BACKOFF_MAX, PROMPT_TOKEN_LIMIT, API_VALIDATION_MODEL,
+    FILTER_FILE_CONTEXT_LINES, FILTER_FILE_MAX_CHARS,
 )
 from claudecode.json_parser import parse_json_with_fallbacks
 from claudecode.logger import get_logger
@@ -59,7 +60,7 @@ class ClaudeAPIClient:
         try:
             # Simple test call to verify API access
             self.client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model=API_VALIDATION_MODEL,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Hello"}],
                 timeout=10
@@ -216,15 +217,16 @@ PR Context:
 - Description: {(pr_context.get('description') or 'No description')[:500]}...
 """
         
-        # Get file content if available
+        # Get file content if available (windowed around the finding line,
+        # with line numbers so the model can verify the flagged location)
         file_path = finding.get('file', '')
         file_content = ""
         if file_path:
-            success, content, error = self._read_file(file_path)
+            success, content, error = self._read_file(file_path, focus_line=finding.get('line'))
             if success:
                 file_content = f"""
 
-File Content ({file_path}):
+File Content ({file_path}, with line numbers):
 ```
 {content}
 ```"""
@@ -289,12 +291,17 @@ Respond with EXACTLY this JSON structure (no markdown, no code blocks):
 }}"""
 
     
-    def _read_file(self, file_path: str) -> Tuple[bool, str, str]:
+    def _read_file(self, file_path: str, focus_line: Optional[int] = None) -> Tuple[bool, str, str]:
         """Read a file and format it with line numbers.
-        
+
+        Large files are windowed around focus_line (or truncated from the top
+        when no focus line is given) so a single huge file can't blow up the
+        filter prompt.
+
         Args:
             file_path: Path to the file to read
-            
+            focus_line: Optional 1-based line number to center the window on
+
         Returns:
             Tuple of (success, formatted_content, error_message)
         """
@@ -324,13 +331,49 @@ Respond with EXACTLY this JSON structure (no markdown, no code blocks):
                 # Try with latin-1 encoding as fallback
                 with open(path, 'r', encoding='latin-1') as f:
                     content = f.read()
-            
-            return True, content, ""
+
+            return True, self._format_file_window(content, focus_line), ""
             
         except Exception as e:
             error_msg = f"Error reading file {file_path}: {str(e)}"
             logger.error(error_msg)
             return False, "", error_msg
+
+    @staticmethod
+    def _format_file_window(content: str,
+                            focus_line: Optional[int] = None,
+                            context_lines: int = FILTER_FILE_CONTEXT_LINES,
+                            max_chars: int = FILTER_FILE_MAX_CHARS) -> str:
+        """Add line numbers and window content around a focus line.
+
+        Small files are returned whole (numbered). For larger files, a window
+        of ±context_lines around focus_line is used, then the result is capped
+        at max_chars.
+        """
+        lines = content.split('\n')
+        total_lines = len(lines)
+
+        start = 0
+        end = total_lines
+        if total_lines > 2 * context_lines:
+            if isinstance(focus_line, int) and focus_line > 0:
+                start = max(0, focus_line - 1 - context_lines)
+                end = min(total_lines, focus_line - 1 + context_lines + 1)
+            else:
+                end = 2 * context_lines
+
+        numbered = []
+        if start > 0:
+            numbered.append(f"... ({start} earlier lines omitted)")
+        for idx in range(start, end):
+            numbered.append(f"{idx + 1:>6}\t{lines[idx]}")
+        if end < total_lines:
+            numbered.append(f"... ({total_lines - end} later lines omitted)")
+
+        result = '\n'.join(numbered)
+        if len(result) > max_chars:
+            result = result[:max_chars] + "\n... (content truncated)"
+        return result
 
 
 def get_claude_api_client(model: str = DEFAULT_CLAUDE_MODEL,

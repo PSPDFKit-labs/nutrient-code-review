@@ -152,8 +152,13 @@ runs:
       shell: bash
       run: |
         echo "::group::Install gh CLI"
-        # Install GitHub CLI for PR operations
-        sudo apt-get update && sudo apt-get install -y gh
+        # Install GitHub CLI for PR operations (pre-installed on GitHub-hosted
+        # runners - skip the ~30s apt round-trip when already present)
+        if command -v gh >/dev/null 2>&1; then
+          echo "gh already installed: $(gh --version | head -n 1)"
+        else
+          sudo apt-get update && sudo apt-get install -y gh
+        fi
         echo "::endgroup::"
 
     - name: Get PR info for issue_comment events
@@ -346,7 +351,7 @@ runs:
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: '18'
+        node-version: '22'
 
     - name: Setup git for diffing
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
@@ -387,7 +392,10 @@ runs:
         echo "::group::Install Deps"
         pip install -r "$ACTION_PATH/claudecode/requirements.txt"
         npm install -g @anthropic-ai/claude-code
-        sudo apt-get update && sudo apt-get install -y jq
+        # jq is pre-installed on GitHub-hosted runners - only install if missing
+        if ! command -v jq >/dev/null 2>&1; then
+          sudo apt-get update && sudo apt-get install -y jq
+        fi
         echo "::endgroup::"
 
     - name: Run ClaudeCode scan
