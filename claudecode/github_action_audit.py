@@ -263,9 +263,12 @@ class GitHubActionClient:
                     included_files.append(filename)
                     logger.debug(f"Added {filename} to diff ({section_chars} chars, total: {current_chars}/{max_diff_chars})")
 
-                # If truncated, stop fetching further pages (saves API calls)
-                if is_truncated:
-                    logger.info(f"Diff truncated at {files_with_patches} files ({current_chars} chars)")
+                # Stop fetching further pages only once the remaining budget
+                # is too small for any meaningful diff section - files on
+                # later pages may still fit even after some were skipped.
+                MIN_USEFUL_SECTION_CHARS = 200
+                if is_truncated and (max_diff_chars - current_chars) < MIN_USEFUL_SECTION_CHARS:
+                    logger.info(f"Diff budget exhausted at {files_with_patches} files ({current_chars} chars)")
                     break
 
                 # GitHub API supports up to 3000 files
@@ -433,12 +436,15 @@ class GitHubActionClient:
         if not isinstance(total, int):
             return True
 
+        if total == 0:
+            return False
+
         plus_one = summary.get('+1', 0)
         minus_one = summary.get('-1', 0)
-        # Only skip when the summary is consistent with just the bot's seed
-        # thumbs (at most one of each, and no other reaction types).
-        return not (total <= 2 and plus_one <= 1 and minus_one <= 1
-                    and plus_one + minus_one == total)
+        # Skip only when the summary is exactly the bot's two seed thumbs.
+        # A single thumb may be a human reaction on a comment whose seeding
+        # partially failed, so anything else is fetched to be safe.
+        return not (total == 2 and plus_one == 1 and minus_one == 1)
 
     def get_comment_reactions(self, repo_name: str, comment_id: int) -> Dict[str, int]:
         """Get reactions for a specific comment, excluding bot reactions.
@@ -574,11 +580,20 @@ class SimpleClaudeRunner:
             # Construct Claude Code command
             # Use stdin for prompt to avoid "argument list too long" error
             #
-            # Tool hardening: the review only needs local repo exploration
-            # (Read/Grep/Glob/git). Network-capable tools are disallowed so a
-            # prompt-injection attempt in a malicious PR cannot exfiltrate data
-            # or fetch attacker-controlled instructions; ps is disallowed so
-            # credentials can't be snooped from process listings.
+            # Tool hardening: the review only needs local repo exploration.
+            # Bash is restricted to an allowlist of read-only git commands
+            # (everything else is denied in headless mode), so a
+            # prompt-injection attempt in a malicious PR cannot run arbitrary
+            # commands, exfiltrate data, or fetch attacker-controlled
+            # instructions. Network tools and ps are additionally denylisted
+            # as defense in depth.
+            allowed_tools = ','.join([
+                'Bash(git diff:*)',
+                'Bash(git log:*)',
+                'Bash(git show:*)',
+                'Bash(git status:*)',
+                'Bash(git blame:*)',
+            ])
             disallowed_tools = ','.join([
                 'Bash(ps:*)',
                 'Bash(curl:*)',
@@ -591,6 +606,7 @@ class SimpleClaudeRunner:
                 'claude',
                 '--output-format', 'json',
                 '--model', DEFAULT_CLAUDE_MODEL,
+                '--allowed-tools', allowed_tools,
                 '--disallowed-tools', disallowed_tools,
                 '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA)
             ]
@@ -1095,6 +1111,11 @@ def main():
                 custom_security_instructions=custom_security_instructions,
                 review_context=review_context,
                 diff_metadata=diff_metadata,
+                # Reflects the *actual* runtime state: False when disabled by
+                # config or when the filter disabled itself (e.g. API
+                # validation failure), so the prompt never promises a
+                # validation stage that won't run.
+                downstream_filter_enabled=findings_filter.use_claude_filtering,
             )
             return claude_runner.run_code_review(repo_dir, prompt_text), len(prompt_text)
 

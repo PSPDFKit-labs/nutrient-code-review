@@ -1535,9 +1535,12 @@ describe('comment-pr-findings.js', () => {
       const mockPrFiles = [{ filename: 'test.py', patch: '@@ -10,20 +10,20 @@' }];
 
       // An inline comment from a previous review run for the first finding
+      // (still anchored to a live diff position, posted by the bot)
       const existingComments = [{
         path: 'test.py',
         line: 11, // line drifted, but same finding title
+        position: 5,
+        user: { type: 'Bot' },
         body: '🤖 **Code Review Finding: Already reported issue**\n\n**Severity:** HIGH\n'
       }];
 
@@ -1582,6 +1585,73 @@ describe('comment-pr-findings.js', () => {
       expect(reviewDataCaptured.comments).toHaveLength(1);
       expect(reviewDataCaptured.comments[0].body).toContain('Brand new issue');
       expect(reviewDataCaptured.comments[0].body).not.toContain('Already reported issue');
+      // Suppressed duplicates stay discoverable via the review summary body
+      expect(reviewDataCaptured.body).toContain('previously reported finding');
+      expect(reviewDataCaptured.body).toContain('Already reported issue');
+    });
+
+    test('should re-post findings whose previous thread is outdated (position null)', async () => {
+      const mockFindings = [{
+        file: 'test.py',
+        line: 10,
+        title: 'Persistent issue',
+        description: 'Still present, but the old thread is outdated',
+        severity: 'HIGH',
+        category: 'security'
+      }];
+
+      const mockPrFiles = [{ filename: 'test.py', patch: '@@ -10,1 +10,1 @@' }];
+
+      // Same path+title, but the comment is anchored to an outdated diff
+      // position - it must NOT suppress a fresh, correctly-anchored comment
+      const existingComments = [{
+        path: 'test.py',
+        line: null,
+        position: null,
+        user: { type: 'Bot' },
+        body: '🤖 **Code Review Finding: Persistent issue**\n\n**Severity:** HIGH\n'
+      }];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(existingComments), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              reviewDataCaptured = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured).toBeTruthy();
+      expect(reviewDataCaptured.comments).toHaveLength(1);
+      expect(reviewDataCaptured.comments[0].body).toContain('Persistent issue');
     });
   });
 });

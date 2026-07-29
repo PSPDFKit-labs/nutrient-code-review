@@ -311,6 +311,8 @@ class FindingsFilter:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 analysis_results = list(executor.map(_analyze, findings_after_hard))
 
+            api_failures = 0
+
             for (orig_idx, finding), (success, analysis_result, error_msg) in zip(
                 findings_after_hard, analysis_results
             ):
@@ -345,6 +347,7 @@ class FindingsFilter:
                 else:
                     # Claude API call failed for this finding - keep it with warning
                     logger.warning(f"Claude API call failed for finding {orig_idx}: {error_msg}")
+                    api_failures += 1
                     enriched_finding = finding.copy()
                     enriched_finding['_filter_metadata'] = {
                         'confidence_score': 10.0,  # Default high confidence
@@ -352,6 +355,13 @@ class FindingsFilter:
                     }
                     findings_after_claude.append(enriched_finding)
                     stats.kept_findings += 1
+
+            if api_failures and api_failures == len(findings_after_hard):
+                logger.warning(
+                    f"Claude filtering was effectively disabled for this run: all "
+                    f"{api_failures} validation calls failed and every finding was "
+                    f"kept unvalidated (fail-open)."
+                )
         else:
             # Claude filtering disabled or no client - keep all findings from hard filter
             for orig_idx, finding in findings_after_hard:

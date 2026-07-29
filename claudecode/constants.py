@@ -6,8 +6,6 @@ import os
 
 # API Configuration
 DEFAULT_CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL') or 'claude-opus-5'
-# Cheap model used for the one-off API access validation call
-API_VALIDATION_MODEL = 'claude-haiku-4-5'
 DEFAULT_TIMEOUT_SECONDS = 180  # 3 minutes
 DEFAULT_MAX_RETRIES = 3
 RATE_LIMIT_BACKOFF_MAX = 30  # Maximum backoff time for rate limits

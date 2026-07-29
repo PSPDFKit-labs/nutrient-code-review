@@ -79,7 +79,18 @@ function ghApiPaginated(baseEndpoint) {
   let page = 1;
   while (true) {
     const separator = baseEndpoint.includes('?') ? '&' : '?';
-    const batch = ghApi(`${baseEndpoint}${separator}per_page=${perPage}&page=${page}`);
+    let batch;
+    try {
+      batch = ghApi(`${baseEndpoint}${separator}per_page=${perPage}&page=${page}`);
+    } catch (error) {
+      if (page === 1) {
+        throw error; // Nothing fetched yet - a real API failure, surface it
+      }
+      // Degrade gracefully on mid-pagination errors (e.g. GitHub's 3,000-file
+      // listing cap): keep the pages we already have instead of aborting.
+      console.error(`Pagination of ${baseEndpoint} stopped at page ${page}: ${error.message}`);
+      break;
+    }
     if (!Array.isArray(batch) || batch.length === 0) {
       break;
     }
@@ -112,6 +123,16 @@ function getExistingFindingKeys() {
   try {
     const comments = ghApiPaginated(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/comments`);
     for (const comment of comments) {
+      // Only dedupe against comments this bot posted...
+      if (comment.user && comment.user.type && comment.user.type !== 'Bot') {
+        continue;
+      }
+      // ...that are still anchored to a live diff position. An outdated
+      // comment (position: null) points at code that has since changed, so a
+      // re-raised finding there deserves a fresh, correctly-anchored thread.
+      if (comment.position === null || comment.position === undefined) {
+        continue;
+      }
       const title = extractFindingTitle(comment.body);
       if (title && comment.path) {
         keys.add(`${comment.path}::${title}`);
@@ -359,7 +380,7 @@ async function run() {
     const reviewEvent = COMMENT_ONLY_MODE
       ? 'COMMENT'
       : (highSeverityCount > 0 ? 'REQUEST_CHANGES' : 'APPROVE');
-    const reviewBody = buildReviewSummary(newFindings, prSummary, analysisSummary);
+    let reviewBody = buildReviewSummary(newFindings, prSummary, analysisSummary);
 
     // Prepare review comments
     const reviewComments = [];
@@ -372,6 +393,7 @@ async function run() {
     }
 
     let fileMap = {};
+    const suppressedDuplicates = [];
     if (!silenceClaudeCodeComments && newFindings.length > 0) {
       // Get the PR diff to map file lines to diff positions (paginated -
       // PRs can have more than 100 changed files)
@@ -406,6 +428,7 @@ async function run() {
         // re-posting would create duplicate threads)
         if (existingFindingKeys.has(`${file}::${title}`)) {
           console.log(`Finding "${title}" on ${file} already has a comment thread, skipping duplicate`);
+          suppressedDuplicates.push({ file, title });
           continue;
         }
 
@@ -454,6 +477,16 @@ async function run() {
 
     if (reviewComments.length === 0) {
       console.log('No inline comments to add; posting summary review only');
+    }
+
+    // Keep still-valid findings discoverable even when their inline comment
+    // was suppressed as a duplicate of an earlier thread (which may be
+    // anchored to an outdated diff position).
+    if (suppressedDuplicates.length > 0) {
+      const items = suppressedDuplicates
+        .map(d => `- \`${d.file}\`: ${d.title}`)
+        .join('\n');
+      reviewBody += `\n\n${suppressedDuplicates.length} previously reported finding${suppressedDuplicates.length === 1 ? '' : 's'} still appl${suppressedDuplicates.length === 1 ? 'ies' : 'y'} (see existing review threads):\n${items}`;
     }
 
     // Handle existing reviews - update in place if state unchanged, otherwise dismiss and recreate

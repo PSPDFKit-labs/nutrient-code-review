@@ -170,6 +170,11 @@ class TestSimpleClaudeRunner:
         assert 'json' in cmd
         assert '--model' in cmd
         assert DEFAULT_CLAUDE_MODEL in cmd
+        assert '--allowed-tools' in cmd
+        allowed = cmd[cmd.index('--allowed-tools') + 1]
+        assert 'Bash(git diff:*)' in allowed
+        assert 'Bash(git log:*)' in allowed
+        assert 'Bash(git show:*)' in allowed
         assert '--disallowed-tools' in cmd
         disallowed = cmd[cmd.index('--disallowed-tools') + 1]
         assert 'Bash(ps:*)' in disallowed

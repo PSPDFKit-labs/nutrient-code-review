@@ -444,7 +444,17 @@ runs:
                 
         # Set timeout
         export CLAUDE_TIMEOUT="$CLAUDECODE_TIMEOUT"
-        
+
+        # Remove credentials that actions/checkout persisted into git config.
+        # All git fetches happened in earlier steps and later steps use the
+        # GITHUB_TOKEN env var, so nothing after this point needs them - but
+        # the Claude review subprocess (which explores this checkout) must
+        # not be able to read the workflow token from .git/config.
+        for key in $(git config --local --list --name-only 2>/dev/null | grep -i 'extraheader$' || true); do
+          git config --local --unset-all "$key" || true
+          echo "Removed persisted git credential config: $key"
+        done
+
         # Run ClaudeCode audit with verbose debugging
         export REPO_PATH=$(pwd)
         cd "$ACTION_PATH"

@@ -10,7 +10,7 @@ from anthropic import Anthropic
 
 from claudecode.constants import (
     DEFAULT_CLAUDE_MODEL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_RETRIES,
-    RATE_LIMIT_BACKOFF_MAX, PROMPT_TOKEN_LIMIT, API_VALIDATION_MODEL,
+    RATE_LIMIT_BACKOFF_MAX, PROMPT_TOKEN_LIMIT,
     FILTER_FILE_CONTEXT_LINES, FILTER_FILE_MAX_CHARS,
 )
 from claudecode.json_parser import parse_json_with_fallbacks
@@ -53,14 +53,18 @@ class ClaudeAPIClient:
     
     def validate_api_access(self) -> Tuple[bool, str]:
         """Validate that API access is working.
-        
+
+        Pings the same model used for filtering, so a misconfigured or
+        retired CLAUDE_MODEL is caught here instead of silently failing
+        (fail-open) on every per-finding call later.
+
         Returns:
             Tuple of (success, error_message)
         """
         try:
             # Simple test call to verify API access
             self.client.messages.create(
-                model=API_VALIDATION_MODEL,
+                model=self.model,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Hello"}],
                 timeout=10
@@ -347,11 +351,18 @@ Respond with EXACTLY this JSON structure (no markdown, no code blocks):
         """Add line numbers and window content around a focus line.
 
         Small files are returned whole (numbered). For larger files, a window
-        of ±context_lines around focus_line is used, then the result is capped
-        at max_chars.
+        of ±context_lines around focus_line is used. The character budget is
+        applied by shrinking the window symmetrically around the focus line -
+        never by chopping off the tail - so the flagged line is always present
+        in what the filter model sees.
         """
         lines = content.split('\n')
         total_lines = len(lines)
+
+        # A stale finding may reference a line beyond EOF - clamp it so the
+        # window still shows the end of the file instead of nothing.
+        if isinstance(focus_line, int) and focus_line > total_lines:
+            focus_line = total_lines
 
         start = 0
         end = total_lines
@@ -362,18 +373,55 @@ Respond with EXACTLY this JSON structure (no markdown, no code blocks):
             else:
                 end = 2 * context_lines
 
-        numbered = []
-        if start > 0:
-            numbered.append(f"... ({start} earlier lines omitted)")
-        for idx in range(start, end):
-            numbered.append(f"{idx + 1:>6}\t{lines[idx]}")
-        if end < total_lines:
-            numbered.append(f"... ({total_lines - end} later lines omitted)")
+        def render(window_start: int, window_end: int) -> str:
+            numbered = []
+            if window_start > 0:
+                numbered.append(f"... ({window_start} earlier lines omitted)")
+            for idx in range(window_start, window_end):
+                numbered.append(f"{idx + 1:>6}\t{lines[idx]}")
+            if window_end < total_lines:
+                numbered.append(f"... ({total_lines - window_end} later lines omitted)")
+            return '\n'.join(numbered)
 
-        result = '\n'.join(numbered)
-        if len(result) > max_chars:
-            result = result[:max_chars] + "\n... (content truncated)"
-        return result
+        result = render(start, end)
+        if len(result) <= max_chars:
+            return result
+
+        # Over budget: grow a window outward from the focus line, one line at
+        # a time, so the focus line is guaranteed to fit within max_chars.
+        if isinstance(focus_line, int) and 0 < focus_line <= total_lines:
+            anchor = focus_line - 1
+        else:
+            anchor = start
+        anchor = min(max(anchor, start), end - 1)
+
+        def line_cost(idx: int) -> int:
+            return len(f"{idx + 1:>6}\t{lines[idx]}") + 1  # +1 for newline
+
+        budget = max(max_chars - 200, 200)  # headroom for the omission markers
+
+        if line_cost(anchor) > budget:
+            # Even the focus line alone exceeds the budget - include a
+            # truncated version of it rather than nothing.
+            focus_text = lines[anchor][:budget]
+            return f"{anchor + 1:>6}\t{focus_text}\n... (line truncated; surrounding content omitted)"
+
+        low = high = anchor
+        used = line_cost(anchor)
+        while True:
+            grew = False
+            if low - 1 >= start and used + line_cost(low - 1) <= budget:
+                low -= 1
+                used += line_cost(low)
+                grew = True
+            if high + 1 < end and used + line_cost(high + 1) <= budget:
+                high += 1
+                used += line_cost(high)
+                grew = True
+            if not grew:
+                break
+
+        return render(low, high + 1)
 
 
 def get_claude_api_client(model: str = DEFAULT_CLAUDE_MODEL,
