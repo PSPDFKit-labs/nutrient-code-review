@@ -57,7 +57,10 @@ jobs:
     - name: Run comment script tests
       run: |
         cd scripts
-        bun test
+        bun test comment-pr-findings.bun.test.js
+
+    - name: Run Check Run script tests
+      run: node --test scripts/check-run.test.js
 
     - name: Run bash script tests
       run: |
