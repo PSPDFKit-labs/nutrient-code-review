@@ -96,13 +96,14 @@ if [ "$ENABLE_CLAUDECODE" == "true" ]; then
   esac
 fi
 
-# 2. Check SHA-based deduplication (with exception for explicit review requests)
+# 2. Check SHA-based deduplication (with exception for GitHub review requests)
 if [ "$ENABLE_CLAUDECODE" == "true" ] && [ -f ".claudecode-marker/marker.json" ]; then
   if ! MARKER_SHA=$(jq -r '.sha // empty' .claudecode-marker/marker.json 2>/dev/null); then
     echo "Warning: Failed to parse marker SHA, proceeding with review"
   elif [ -n "$MARKER_SHA" ] && [ "$MARKER_SHA" == "$GITHUB_SHA" ]; then
-    # Explicit requests must always be retryable, including on the same SHA.
-    if [ "$TRIGGER_TYPE" == "review_request" ] || [ "$TRIGGER_TYPE" == "slash_command" ] || [ "$TRIGGER_TYPE" == "mention" ]; then
+    # A GitHub review request is the existing appeal mechanism. Ordinary review
+    # comments and mentions still deduplicate after a successful same-SHA run.
+    if [ "$TRIGGER_TYPE" == "review_request" ]; then
       echo "Explicit review request on same SHA $GITHUB_SHA - allowing re-review (appeal mechanism)"
     else
       echo "Review already completed for SHA $GITHUB_SHA, skipping duplicate (trigger: $TRIGGER_TYPE)"
