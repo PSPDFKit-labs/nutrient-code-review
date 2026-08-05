@@ -412,9 +412,22 @@ runs:
         echo "Base SHA (PR snapshot): $BASE_COMMIT"
         echo "Head SHA (current PR): $HEAD_COMMIT"
 
-        # Fetch both commits. The worktree is already at the PR head.
-        git fetch origin "$BASE_COMMIT" --depth=1
-        git fetch origin "$HEAD_COMMIT" --depth=1
+        # actions/checkout normally leaves the PR head in the local object
+        # database. Fetch only commits that are actually missing: on large
+        # repositories, even a shallow fetch can take several minutes.
+        if ! git cat-file -e "$BASE_COMMIT^{commit}" 2>/dev/null; then
+          echo "Base commit is not available locally; fetching it."
+          git fetch origin "$BASE_COMMIT" --depth=1
+        else
+          echo "Base commit is already available locally; skipping fetch."
+        fi
+
+        if ! git cat-file -e "$HEAD_COMMIT^{commit}" 2>/dev/null; then
+          echo "Head commit is not available locally; fetching it."
+          git fetch origin "$HEAD_COMMIT" --depth=1
+        else
+          echo "Head commit is already available locally; skipping fetch."
+        fi
 
         # Keep the PR-head files in the worktree, but point HEAD and the index at
         # the base snapshot. A mixed reset changes metadata only; unlike restoring
