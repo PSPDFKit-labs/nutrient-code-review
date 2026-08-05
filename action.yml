@@ -412,18 +412,25 @@ runs:
         echo "Base SHA (PR snapshot): $BASE_COMMIT"
         echo "Head SHA (current PR): $HEAD_COMMIT"
 
-        # Fetch both commits
+        # Fetch both commits. The worktree is already at the PR head.
         git fetch origin "$BASE_COMMIT" --depth=1
         git fetch origin "$HEAD_COMMIT" --depth=1
 
-        # Reset to base commit (B)
-        git checkout "$BASE_COMMIT"
+        # Keep the PR-head files in the worktree, but point HEAD and the index at
+        # the base snapshot. A mixed reset changes metadata only; unlike restoring
+        # `.` from the head commit, it does not rewrite an entire large repository.
+        git checkout --detach "$HEAD_COMMIT"
+        git reset --mixed --no-refresh "$BASE_COMMIT"
 
-        # Restore PR files to working directory (E) - NOT staged
-        git restore --source="$HEAD_COMMIT" --worktree .
+        # Files added by the PR are now untracked because the index represents
+        # the base commit. Mark them intent-to-add so plain `git diff` includes
+        # their contents without staging them.
+        while IFS= read -r -d '' ADDED_FILE; do
+          git add --intent-to-add -- "$ADDED_FILE"
+        done < <(git diff --name-only --diff-filter=A -z "$BASE_COMMIT" "$HEAD_COMMIT")
 
-        # Now: HEAD=B, index=B, worktree=E
-        # So: git diff shows B → E (PR changes)
+        # Now: HEAD=base, index=base, worktree=head, so plain `git diff` shows
+        # exactly the PR changes without materializing every tracked file again.
         echo "Repository prepared. Plain 'git diff' now shows PR changes."
         echo "::endgroup::"
 
