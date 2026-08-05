@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Script to comment on PRs with code review findings from ClaudeCode
+ * Provider-neutral publisher for a structured code-review result.
  */
 
 const fs = require('fs');
@@ -215,33 +215,51 @@ function formatPrSummary(prSummary, filesReviewed) {
 
 async function run() {
   try {
-    // Read the findings
     let newFindings = [];
-    try {
-      const findingsData = fs.readFileSync('findings.json', 'utf8');
-      newFindings = JSON.parse(findingsData);
-    } catch (e) {
-      console.log('Could not read findings file');
-      return;
-    }
-
-    // Read the PR summary
     let prSummary = null;
-    try {
-      const summaryData = fs.readFileSync('pr-summary.json', 'utf8');
-      prSummary = JSON.parse(summaryData);
-    } catch (e) {
-      console.log('Could not read PR summary file, continuing without it');
-    }
-
-    // Read the analysis summary (required - contains files_reviewed and severity counts)
     let analysisSummary;
-    try {
-      const analysisData = fs.readFileSync('analysis-summary.json', 'utf8');
-      analysisSummary = JSON.parse(analysisData);
-    } catch (e) {
-      console.log('Could not read analysis summary file');
-      return;
+    const reviewResultsFile = process.env.REVIEW_RESULTS_FILE;
+
+    if (reviewResultsFile) {
+      const reviewResult = JSON.parse(fs.readFileSync(reviewResultsFile, 'utf8'));
+      if (!Array.isArray(reviewResult.findings) || typeof reviewResult.pr_summary !== 'object') {
+        throw new Error(`Review result ${reviewResultsFile} does not match the shared schema`);
+      }
+      newFindings = reviewResult.findings;
+      prSummary = reviewResult.pr_summary;
+      analysisSummary = reviewResult.analysis_summary || {};
+
+      if (analysisSummary.files_reviewed === undefined) {
+        const reviewedFiles = new Set();
+        for (const change of prSummary.file_changes || []) {
+          for (const file of change.files || []) reviewedFiles.add(file);
+        }
+        analysisSummary.files_reviewed = reviewedFiles.size;
+      }
+      if (analysisSummary.high_severity === undefined) {
+        analysisSummary.high_severity = newFindings.filter(f => f.severity === 'HIGH').length;
+        analysisSummary.medium_severity = newFindings.filter(f => f.severity === 'MEDIUM').length;
+        analysisSummary.low_severity = newFindings.filter(f => f.severity === 'LOW').length;
+      }
+    } else {
+      // Backward-compatible file layout for existing external callers.
+      try {
+        newFindings = JSON.parse(fs.readFileSync('findings.json', 'utf8'));
+      } catch (e) {
+        console.log('Could not read findings file');
+        return;
+      }
+      try {
+        prSummary = JSON.parse(fs.readFileSync('pr-summary.json', 'utf8'));
+      } catch (e) {
+        console.log('Could not read PR summary file, continuing without it');
+      }
+      try {
+        analysisSummary = JSON.parse(fs.readFileSync('analysis-summary.json', 'utf8'));
+      } catch (e) {
+        console.log('Could not read analysis summary file');
+        return;
+      }
     }
 
     function buildReviewSummary(findings, prSummaryObj, analysisSummaryObj) {
@@ -309,11 +327,11 @@ async function run() {
     // Prepare review comments
     const reviewComments = [];
 
-    // Check if ClaudeCode comments should be silenced
+    // Check if inline review comments should be silenced
     const silenceClaudeCodeComments = process.env.SILENCE_CLAUDECODE_COMMENTS === 'true';
 
     if (silenceClaudeCodeComments) {
-      console.log(`ClaudeCode comments silenced - excluding ${newFindings.length} findings from inline comments`);
+      console.log(`Inline comments silenced - excluding ${newFindings.length} findings from inline comments`);
     }
 
     let fileMap = {};
