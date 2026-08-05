@@ -7,9 +7,17 @@ const test = require('node:test');
 const {
   completionPayload,
   conclusionForJobStatus,
+  escapeWorkflowCommandData,
   run,
   startPayload,
 } = require('./check-run');
+
+test('workflow-command warning data is escaped', () => {
+  assert.equal(
+    escapeWorkflowCommandData('API failed 100%\r\n::error::injected'),
+    'API failed 100%25%0D%0A::error::injected',
+  );
+});
 
 test('startPayload creates an in-progress Check Run on the exact PR head', () => {
   const payload = startPayload({

@@ -300,18 +300,26 @@ runs:
     - name: Start PR Check Run
       id: check-run-start
       if: inputs.publish-check == 'true' && steps.claudecode-check.outputs.enable_claudecode == 'true'
-      shell: bash
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       continue-on-error: true
       env:
         GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
+        CHECK_RUN_SCRIPT: ${{ github.action_path }}/scripts/check-run.js
         CHECK_RUN_OPERATION: start
         CHECK_NAME: ${{ inputs.check-name }}
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
         PR_NUMBER: ${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}
         REQUESTED_BY: ${{ github.actor }}
         DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      run: |
-        node "${{ github.action_path }}/scripts/check-run.js"
+      with:
+        github-token: ${{ env.GITHUB_TOKEN || github.token }}
+        script: |
+          const { run } = require(process.env.CHECK_RUN_SCRIPT)
+          try {
+            await run()
+          } catch (error) {
+            core.warning(error.message)
+          }
 
     - name: Checkout exact PR head
       if: inputs.checkout-pr == 'true' && steps.claudecode-check.outputs.enable_claudecode == 'true'
@@ -643,18 +651,26 @@ runs:
 
     - name: Complete PR Check Run
       if: always() && inputs.publish-check == 'true' && steps.check-run-start.outputs.check_run_id != ''
-      shell: bash
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       continue-on-error: true
       env:
         GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
+        CHECK_RUN_SCRIPT: ${{ github.action_path }}/scripts/check-run.js
         CHECK_RUN_OPERATION: complete
         CHECK_RUN_ID: ${{ steps.check-run-start.outputs.check_run_id }}
         CHECK_NAME: ${{ inputs.check-name }}
         CHECK_CONCLUSION: ${{ job.status }}
         PR_NUMBER: ${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}
         DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      run: |
-        node "${{ github.action_path }}/scripts/check-run.js"
+      with:
+        github-token: ${{ env.GITHUB_TOKEN || github.token }}
+        script: |
+          const { run } = require(process.env.CHECK_RUN_SCRIPT)
+          try {
+            await run()
+          } catch (error) {
+            core.warning(error.message)
+          }
 
 branding:
   icon: 'shield'

@@ -59,6 +59,10 @@ function appendOutput(name, value, outputPath = process.env.GITHUB_OUTPUT) {
   fs.appendFileSync(outputPath, `${name}=${value}\n`);
 }
 
+function escapeWorkflowCommandData(value) {
+  return String(value).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+}
+
 function conclusionForJobStatus(status) {
   switch (status) {
     case 'failure':
@@ -153,7 +157,7 @@ async function run(env = process.env, request = requestJson) {
 if (require.main === module) {
   run().catch((error) => {
     // Check publishing is observability. It must not prevent the review itself.
-    console.log(`::warning::${error.message}`);
+    console.log(`::warning::${escapeWorkflowCommandData(error.message)}`);
     process.exitCode = 0;
   });
 }
@@ -162,6 +166,7 @@ module.exports = {
   appendOutput,
   completionPayload,
   conclusionForJobStatus,
+  escapeWorkflowCommandData,
   requestJson,
   run,
   startPayload,
