@@ -64,6 +64,21 @@ inputs:
     required: false
     default: 'github-actions'
 
+  checkout-pr:
+    description: 'Check out the exact PR head after trigger validation. Enable this to avoid a caller-side checkout that resolves issue_comment events to the default branch.'
+    required: false
+    default: 'false'
+
+  publish-check:
+    description: 'Publish an in-progress/completed GitHub Check Run on the exact PR head SHA. The token needs Checks: write.'
+    required: false
+    default: 'false'
+
+  check-name:
+    description: 'Name shown for the GitHub Check Run.'
+    required: false
+    default: 'Nutrient Code Review'
+
   require-label:
     description: 'Only run review if this label is present on the PR. Leave empty to review all PRs. To trigger on label addition, add "labeled" to your workflow pull_request types.'
     required: false
@@ -145,16 +160,25 @@ outputs:
     description: 'Path to the results JSON file'
     value: ${{ steps.claudecode-scan.outputs.results_file }}
 
+  check-run-id:
+    description: 'GitHub Check Run ID, when publish-check is enabled and creation succeeds'
+    value: ${{ steps.check-run-start.outputs.check_run_id }}
+
+  pr-head-sha:
+    description: 'Exact pull request head SHA selected for review'
+    value: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
+
 runs:
   using: 'composite'
   steps:
     - name: Install GitHub CLI
       shell: bash
       run: |
-        echo "::group::Install gh CLI"
-        # Install GitHub CLI for PR operations
-        sudo apt-get update && sudo apt-get install -y gh
-        echo "::endgroup::"
+        if ! command -v gh >/dev/null 2>&1; then
+          echo "::group::Install gh CLI"
+          sudo apt-get update && sudo apt-get install -y gh
+          echo "::endgroup::"
+        fi
 
     - name: Get PR info for issue_comment events
       id: pr-info
@@ -210,24 +234,6 @@ runs:
         else
           echo "is_pr=false" >> $GITHUB_OUTPUT
           echo "Issue comment is not on a PR, skipping"
-        fi
-
-    - name: Checkout PR head for issue_comment events
-      if: github.event_name == 'issue_comment' && steps.pr-info.outputs.is_pr == 'true'
-      shell: bash
-      run: |
-        set -euo pipefail  # Exit on error, undefined vars, pipe failures
-
-        echo "Checking out PR #${{ steps.pr-info.outputs.pr_number }} at SHA ${{ steps.pr-info.outputs.pr_sha }}"
-
-        if ! git fetch origin pull/${{ steps.pr-info.outputs.pr_number }}/head:pr-${{ steps.pr-info.outputs.pr_number }}; then
-          echo "Error: Failed to fetch PR branch"
-          exit 1
-        fi
-
-        if ! git checkout pr-${{ steps.pr-info.outputs.pr_number }}; then
-          echo "Error: Failed to checkout PR branch"
-          exit 1
         fi
 
     - name: Check ClaudeCode run history
@@ -290,6 +296,49 @@ runs:
           -H "Accept: application/vnd.github+json" \
           -f content='eyes' >/dev/null 2>&1 || \
           echo "::warning::Unable to add eyes reaction to slash command comment"
+
+    - name: Start PR Check Run
+      id: check-run-start
+      if: inputs.publish-check == 'true' && steps.claudecode-check.outputs.enable_claudecode == 'true'
+      shell: bash
+      continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
+        CHECK_RUN_OPERATION: start
+        CHECK_NAME: ${{ inputs.check-name }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
+        PR_NUMBER: ${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}
+        REQUESTED_BY: ${{ github.actor }}
+        DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        node "${{ github.action_path }}/scripts/check-run.js"
+
+    - name: Checkout exact PR head
+      if: inputs.checkout-pr == 'true' && steps.claudecode-check.outputs.enable_claudecode == 'true'
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
+        token: ${{ env.GITHUB_TOKEN || github.token }}
+        fetch-depth: 2
+
+    - name: Checkout PR head for legacy issue_comment callers
+      if: inputs.checkout-pr != 'true' && github.event_name == 'issue_comment' && steps.pr-info.outputs.is_pr == 'true' && steps.claudecode-check.outputs.enable_claudecode == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        echo "Checking out PR #${{ steps.pr-info.outputs.pr_number }} at SHA ${{ steps.pr-info.outputs.pr_sha }}"
+
+        if ! git fetch origin pull/${{ steps.pr-info.outputs.pr_number }}/head:pr-${{ steps.pr-info.outputs.pr_number }}; then
+          echo "Error: Failed to fetch PR branch"
+          exit 1
+        fi
+
+        if ! git checkout pr-${{ steps.pr-info.outputs.pr_number }}; then
+          echo "Error: Failed to checkout PR branch"
+          exit 1
+        fi
 
     - name: Reserve ClaudeCode slot to prevent race conditions
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
@@ -571,6 +620,21 @@ runs:
           -H "Accept: application/vnd.github+json" \
           -f content='rocket' >/dev/null 2>&1 || \
           echo "::warning::Unable to add completion reaction to slash command comment"
+
+    - name: Complete PR Check Run
+      if: always() && inputs.publish-check == 'true' && steps.check-run-start.outputs.check_run_id != ''
+      shell: bash
+      continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
+        CHECK_RUN_OPERATION: complete
+        CHECK_RUN_ID: ${{ steps.check-run-start.outputs.check_run_id }}
+        CHECK_NAME: ${{ inputs.check-name }}
+        CHECK_CONCLUSION: ${{ job.status }}
+        PR_NUMBER: ${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}
+        DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        node "${{ github.action_path }}/scripts/check-run.js"
 
 branding:
   icon: 'shield'

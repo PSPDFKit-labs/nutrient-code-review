@@ -63,6 +63,7 @@ name: Code Review
 permissions:
   pull-requests: write
   contents: read
+  checks: write
 
 on:
   pull_request:
@@ -75,11 +76,6 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 2
-
       - name: Generate App Token
         id: app-token
         uses: actions/create-github-app-token@v1.9.0
@@ -91,11 +87,13 @@ jobs:
         with:
           claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
           app-slug: ${{ steps.app-token.outputs.app-slug }}
+          checkout-pr: true
+          publish-check: true
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 ```
 
-**Note**: The `app-slug` parameter enables the bot to detect when it's mentioned in PR comments (e.g., `@my-code-review-app`). Requires `actions/create-github-app-token@v1.9.0` or later.
+**Note**: The `app-slug` parameter enables the bot to detect when it's mentioned in PR comments (e.g., `@my-code-review-app`). Requires `actions/create-github-app-token@v1.9.0` or later. `publish-check` additionally requires the GitHub App to have **Checks: read and write**. The action reacts to an accepted `review` command and creates the in-progress Check Run before checking out the repository.
 
 ## Security Considerations
 
@@ -131,6 +129,9 @@ This action is not hardened against prompt injection attacks and should only be 
 | `dismiss-stale-reviews` | Dismiss previous bot reviews when posting a new review (useful for follow-up commits) | `true` | No |
 | `skip-draft-prs` | Skip code review on draft pull requests. Does not apply to a review explicitly requested via a bot mention or the `review` comment command - those always run, even on drafts. | `true` | No |
 | `app-slug` | GitHub App slug for bot mention detection. If using `actions/create-github-app-token@v1.9.0+`, pass `${{ steps.app-token.outputs.app-slug }}`. Otherwise defaults to `github-actions`. | `github-actions` | No |
+| `checkout-pr` | Let the action check out the exact PR head after trigger validation. This avoids checking out the default branch for `issue_comment` events. | `false` | No |
+| `publish-check` | Create and complete an advisory Check Run on the exact PR head. Requires `Checks: write`. | `false` | No |
+| `check-name` | Name shown for the Check Run. | `Nutrient Code Review` | No |
 | `require-label` | Only run review if this label is present. Leave empty to review all PRs. Add `labeled` to your workflow `pull_request` types to trigger on label addition. | None | No |
 
 ### Action Outputs
@@ -139,6 +140,8 @@ This action is not hardened against prompt injection attacks and should only be 
 |--------|-------------|
 | `findings-count` | Total number of code review findings |
 | `results-file` | Path to the results JSON file |
+| `check-run-id` | ID of the Check Run created when `publish-check` is enabled |
+| `pr-head-sha` | Exact PR head SHA selected for review |
 
 ### Diff Size Configuration
 
