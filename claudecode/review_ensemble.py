@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Tuple
 
+from claudecode.constants import DEFAULT_SYNTHESIZER_PROVIDER
+
 
 SUPPORTED_REVIEWERS = ("claude", "openai")
 
@@ -40,7 +42,7 @@ def parse_reviewers(value: str) -> Tuple[str, ...]:
 
 def validate_synthesizer(provider: str, model: str) -> Tuple[str, str]:
     """Validate and normalize synthesizer configuration."""
-    normalized_provider = (provider or "openai").strip().lower()
+    normalized_provider = (provider or DEFAULT_SYNTHESIZER_PROVIDER).strip().lower()
     if normalized_provider not in SUPPORTED_REVIEWERS:
         supported = ", ".join(SUPPORTED_REVIEWERS)
         raise ReviewConfigurationError(

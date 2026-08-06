@@ -27,7 +27,10 @@ from claudecode.constants import (
     EXIT_GENERAL_ERROR,
     SUBPROCESS_TIMEOUT,
     DEFAULT_MAX_DIFF_CHARS,
-    CHARS_PER_LINE_ESTIMATE
+    CHARS_PER_LINE_ESTIMATE,
+    DEFAULT_GPT_MODEL,
+    DEFAULT_SYNTHESIZER_PROVIDER,
+    DEFAULT_SYNTHESIZER_MODEL,
 )
 from claudecode.logger import get_logger
 from claudecode.review_schema import REVIEW_OUTPUT_SCHEMA, REVIEW_OUTPUT_SCHEMA_PATH
@@ -845,7 +848,7 @@ def initialize_review_runners():
     """Build the configured reviewer ensemble and synthesizer."""
     reviewer_names = parse_reviewers(os.environ.get('REVIEWERS', 'claude'))
     claude_model = os.environ.get('CLAUDE_MODEL') or DEFAULT_CLAUDE_MODEL
-    openai_model = os.environ.get('OPENAI_MODEL') or 'gpt-5.6-sol'
+    openai_model = os.environ.get('OPENAI_MODEL') or DEFAULT_GPT_MODEL
 
     runners = {}
     for name in reviewer_names:
@@ -864,8 +867,9 @@ def initialize_review_runners():
     synthesizer = None
     if len(reviewer_names) > 1:
         synthesis_provider, synthesis_model = validate_synthesizer(
-            os.environ.get('SYNTHESIZER_PROVIDER', 'openai'),
-            os.environ.get('SYNTHESIZER_MODEL', 'gpt-5.6-terra'),
+            os.environ.get('SYNTHESIZER_PROVIDER')
+            or DEFAULT_SYNTHESIZER_PROVIDER,
+            os.environ.get('SYNTHESIZER_MODEL') or DEFAULT_SYNTHESIZER_MODEL,
         )
         if synthesis_provider == 'claude':
             synthesizer = SimpleClaudeRunner(model=synthesis_model)

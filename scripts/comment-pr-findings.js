@@ -236,11 +236,6 @@ async function run() {
         }
         analysisSummary.files_reviewed = reviewedFiles.size;
       }
-      if (analysisSummary.high_severity === undefined) {
-        analysisSummary.high_severity = newFindings.filter(f => f.severity === 'HIGH').length;
-        analysisSummary.medium_severity = newFindings.filter(f => f.severity === 'MEDIUM').length;
-        analysisSummary.low_severity = newFindings.filter(f => f.severity === 'LOW').length;
-      }
     } else {
       // Backward-compatible file layout for existing external callers.
       try {
@@ -303,9 +298,9 @@ async function run() {
       // Build the findings summary
       body += `Found ${total} ${issueTypes} issue${total === 1 ? '' : 's'}. `;
 
-      // Recommendation based on severity from analysis summary
-      const high = analysisSummaryObj.high_severity || 0;
-      const medium = analysisSummaryObj.medium_severity || 0;
+      // Findings are the source of truth for severity and the review verdict.
+      const high = findings.filter(f => f.severity === 'HIGH').length;
+      const medium = findings.filter(f => f.severity === 'MEDIUM').length;
 
       if (high > 0) {
         body += 'Please address the high-severity issues before merging.';
@@ -318,7 +313,7 @@ async function run() {
       return body;
     }
 
-    const highSeverityCount = analysisSummary.high_severity || 0;
+    const highSeverityCount = newFindings.filter(f => f.severity === 'HIGH').length;
     const reviewEvent = COMMENT_ONLY_MODE
       ? 'COMMENT'
       : (highSeverityCount > 0 ? 'REQUEST_CHANGES' : 'APPROVE');

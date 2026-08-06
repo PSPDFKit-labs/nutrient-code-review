@@ -10,6 +10,11 @@ from claudecode.github_action_audit import (
     initialize_review_runners,
     write_provider_results,
 )
+from claudecode.constants import (
+    DEFAULT_GPT_MODEL,
+    DEFAULT_SYNTHESIZER_MODEL,
+    DEFAULT_SYNTHESIZER_PROVIDER,
+)
 
 
 RESULT = {
@@ -81,6 +86,18 @@ def test_claude_only_configuration_does_not_initialize_codex():
     assert names == ("claude",)
     assert isinstance(runners["claude"], SimpleClaudeRunner)
     assert synthesizer is None
+
+
+def test_default_openai_and_synthesizer_configuration_uses_named_constants():
+    with patch.dict(
+        os.environ, {"REVIEWERS": "claude,openai"}, clear=True
+    ):
+        _, runners, synthesizer = initialize_review_runners()
+
+    assert runners["openai"].model == DEFAULT_GPT_MODEL
+    assert DEFAULT_SYNTHESIZER_PROVIDER == "openai"
+    assert isinstance(synthesizer, SimpleCodexRunner)
+    assert synthesizer.model == DEFAULT_SYNTHESIZER_MODEL
 
 
 def test_two_reviewers_initialize_configured_synthesizer():
