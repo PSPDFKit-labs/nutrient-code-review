@@ -99,6 +99,92 @@ describe('comment-pr-findings.js', () => {
   });
 
   describe('Finding Processing', () => {
+    test('should publish directly from the shared review result JSON', async () => {
+      process.env.REVIEW_RESULTS_FILE = 'final-review.json';
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: { number: 123, head: { sha: 'abc123' } }
+          });
+        }
+        if (path === 'final-review.json') {
+          return JSON.stringify({
+            pr_summary: {
+              overview: 'Provider-neutral summary',
+              file_changes: [
+                { label: 'test.py', files: ['test.py'], changes: 'Changed behavior' }
+              ]
+            },
+            findings: []
+          });
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            reviewDataCaptured = JSON.parse(options.input);
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured.body).toContain('Provider-neutral summary');
+      expect(reviewDataCaptured.body).toContain('1 file reviewed');
+      expect(reviewDataCaptured.body).toContain('No issues found');
+    });
+
+    test('should derive the review verdict from shared-result findings', async () => {
+      process.env.REVIEW_RESULTS_FILE = 'final-review.json';
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({
+            pull_request: { number: 123, head: { sha: 'abc123' } }
+          });
+        }
+        if (path === 'final-review.json') {
+          return JSON.stringify({
+            pr_summary: { overview: 'Summary', file_changes: [] },
+            findings: [{
+              file: 'test.py',
+              line: 1,
+              severity: 'HIGH',
+              category: 'correctness',
+              title: 'Bug',
+              description: 'Broken behavior'
+            }]
+          });
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: '[]', stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            reviewDataCaptured = JSON.parse(options.input);
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured.event).toBe('REQUEST_CHANGES');
+      expect(reviewDataCaptured.body).toContain('high-severity');
+    });
+
     test('should exit early when no findings file exists', async () => {
       readFileSyncSpy.mockImplementation((path) => {
         if (path.includes('github-event.json')) {

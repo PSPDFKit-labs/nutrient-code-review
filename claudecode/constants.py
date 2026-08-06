@@ -6,6 +6,9 @@ import os
 
 # API Configuration
 DEFAULT_CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL') or 'claude-opus-4-8'
+DEFAULT_GPT_MODEL = 'gpt-5.6-sol'
+DEFAULT_SYNTHESIZER_PROVIDER = 'openai'
+DEFAULT_SYNTHESIZER_MODEL = 'gpt-5.6-terra'
 DEFAULT_TIMEOUT_SECONDS = 180  # 3 minutes
 DEFAULT_MAX_RETRIES = 3
 RATE_LIMIT_BACKOFF_MAX = 30  # Maximum backoff time for rate limits
@@ -25,4 +28,3 @@ EXIT_CONFIGURATION_ERROR = 2
 
 # Subprocess Configuration
 SUBPROCESS_TIMEOUT = 1200  # 20 minutes for Claude Code execution
-

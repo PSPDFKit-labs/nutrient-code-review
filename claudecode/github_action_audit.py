@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import subprocess
+import tempfile
 import requests
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
@@ -26,10 +27,21 @@ from claudecode.constants import (
     EXIT_GENERAL_ERROR,
     SUBPROCESS_TIMEOUT,
     DEFAULT_MAX_DIFF_CHARS,
-    CHARS_PER_LINE_ESTIMATE
+    CHARS_PER_LINE_ESTIMATE,
+    DEFAULT_GPT_MODEL,
+    DEFAULT_SYNTHESIZER_PROVIDER,
+    DEFAULT_SYNTHESIZER_MODEL,
 )
 from claudecode.logger import get_logger
-from claudecode.review_schema import REVIEW_OUTPUT_SCHEMA
+from claudecode.review_schema import REVIEW_OUTPUT_SCHEMA, REVIEW_OUTPUT_SCHEMA_PATH
+from claudecode.review_ensemble import (
+    ReviewConfigurationError,
+    ReviewExecutionError,
+    parse_reviewers,
+    run_reviewers,
+    synthesize_reviews,
+    validate_synthesizer,
+)
 
 logger = get_logger(__name__)
 
@@ -504,7 +516,11 @@ class GitHubActionClient:
 class SimpleClaudeRunner:
     """Simplified Claude Code runner for GitHub Actions."""
     
-    def __init__(self, timeout_minutes: Optional[int] = None):
+    def __init__(
+        self,
+        timeout_minutes: Optional[int] = None,
+        model: Optional[str] = None,
+    ):
         """Initialize Claude runner.
         
         Args:
@@ -514,6 +530,7 @@ class SimpleClaudeRunner:
             self.timeout_seconds = timeout_minutes * 60
         else:
             self.timeout_seconds = SUBPROCESS_TIMEOUT
+        self.model = model or DEFAULT_CLAUDE_MODEL
     
     def run_code_review(self, repo_dir: Path, prompt: str) -> Tuple[bool, str, Dict[str, Any]]:
         """Run Claude Code review.
@@ -539,7 +556,7 @@ class SimpleClaudeRunner:
             cmd = [
                 'claude',
                 '--output-format', 'json',
-                '--model', DEFAULT_CLAUDE_MODEL,
+                '--model', self.model,
                 '--disallowed-tools', 'Bash(ps:*)',
                 '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA)
             ]
@@ -547,13 +564,23 @@ class SimpleClaudeRunner:
             # Run Claude Code with retry logic
             NUM_RETRIES = 3
             for attempt in range(NUM_RETRIES):
+                child_env = os.environ.copy()
+                for secret_name in (
+                    'CODEX_API_KEY',
+                    'OPENAI_API_KEY',
+                    'GITHUB_TOKEN',
+                    'GH_TOKEN',
+                ):
+                    child_env.pop(secret_name, None)
+
                 result = subprocess.run(
                     cmd,
                     input=prompt,  # Pass prompt via stdin
                     cwd=repo_dir,
                     capture_output=True,
                     text=True,
-                    timeout=self.timeout_seconds
+                    timeout=self.timeout_seconds,
+                    env=child_env,
                 )
 
                 # Parse JSON output (even if returncode != 0, to detect specific errors)
@@ -668,6 +695,105 @@ class SimpleClaudeRunner:
             return False, f"Failed to check Claude Code: {str(e)}"
 
 
+class SimpleCodexRunner:
+    """Non-interactive Codex runner that emits the shared review JSON schema."""
+
+    def __init__(self, model: str, timeout_minutes: Optional[int] = None):
+        self.model = model
+        self.timeout_seconds = (
+            timeout_minutes * 60 if timeout_minutes is not None else SUBPROCESS_TIMEOUT
+        )
+
+    def run_code_review(
+        self, repo_dir: Path, prompt: str
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        if not repo_dir.exists():
+            return False, f"Repository directory does not exist: {repo_dir}", {}
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="nutrient-codex-review-") as temp_dir:
+                output_path = Path(temp_dir) / "review.json"
+                cmd = [
+                    'codex',
+                    'exec',
+                    '--ephemeral',
+                    '--ignore-user-config',
+                    '--ignore-rules',
+                    '--sandbox',
+                    'read-only',
+                    '--model',
+                    self.model,
+                    '--output-schema',
+                    str(REVIEW_OUTPUT_SCHEMA_PATH),
+                    '--output-last-message',
+                    str(output_path),
+                    '-',
+                ]
+
+                child_env = os.environ.copy()
+                for secret_name in (
+                    'ANTHROPIC_API_KEY',
+                    'GITHUB_TOKEN',
+                    'GH_TOKEN',
+                    'OPENAI_API_KEY',
+                ):
+                    child_env.pop(secret_name, None)
+
+                result = subprocess.run(
+                    cmd,
+                    input=prompt,
+                    cwd=repo_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_seconds,
+                    env=child_env,
+                )
+                if result.returncode != 0:
+                    return (
+                        False,
+                        f"Codex execution failed with return code {result.returncode}: "
+                        f"{result.stderr[-2000:]}",
+                        {},
+                    )
+                if not output_path.exists():
+                    return False, "Codex did not write its structured review output", {}
+
+                success, parsed_result = parse_json_with_fallbacks(
+                    output_path.read_text(encoding="utf-8"), "Codex review output"
+                )
+                if not success or not isinstance(parsed_result, dict):
+                    return False, "Failed to parse Codex structured review output", {}
+                if 'findings' not in parsed_result or 'pr_summary' not in parsed_result:
+                    return False, "Codex output did not match the review schema", {}
+                return True, "", parsed_result
+        except subprocess.TimeoutExpired:
+            return (
+                False,
+                f"Codex execution timed out after {self.timeout_seconds // 60} minutes",
+                {},
+            )
+        except Exception as error:
+            return False, f"Codex execution error: {error}", {}
+
+    def validate_codex_available(self) -> Tuple[bool, str]:
+        try:
+            result = subprocess.run(
+                ['codex', '--version'],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return False, f"Codex returned exit code {result.returncode}"
+            if not os.environ.get('CODEX_API_KEY'):
+                return False, "CODEX_API_KEY environment variable is not set"
+            return True, ""
+        except FileNotFoundError:
+            return False, "Codex is not installed or not in PATH"
+        except Exception as error:
+            return False, f"Failed to check Codex: {error}"
+
+
 
 
 def get_environment_config() -> Tuple[str, int]:
@@ -716,6 +842,77 @@ def initialize_clients() -> Tuple[GitHubActionClient, SimpleClaudeRunner]:
         raise ConfigurationError(f'Failed to initialize Claude runner: {str(e)}')
         
     return github_client, claude_runner
+
+
+def initialize_review_runners():
+    """Build the configured reviewer ensemble and synthesizer."""
+    reviewer_names = parse_reviewers(os.environ.get('REVIEWERS', 'claude'))
+    claude_model = os.environ.get('CLAUDE_MODEL') or DEFAULT_CLAUDE_MODEL
+    openai_model = os.environ.get('OPENAI_MODEL') or DEFAULT_GPT_MODEL
+
+    runners = {}
+    for name in reviewer_names:
+        try:
+            if name == 'claude':
+                runner = SimpleClaudeRunner(model=claude_model)
+            else:
+                runner = SimpleCodexRunner(model=openai_model)
+        except Exception as error:
+            display_name = 'Claude' if name == 'claude' else 'OpenAI'
+            raise ConfigurationError(
+                f"Failed to initialize {display_name} runner: {error}"
+            ) from error
+        runners[name] = runner
+
+    synthesizer = None
+    if len(reviewer_names) > 1:
+        synthesis_provider, synthesis_model = validate_synthesizer(
+            os.environ.get('SYNTHESIZER_PROVIDER')
+            or DEFAULT_SYNTHESIZER_PROVIDER,
+            os.environ.get('SYNTHESIZER_MODEL') or DEFAULT_SYNTHESIZER_MODEL,
+        )
+        if synthesis_provider == 'claude':
+            synthesizer = SimpleClaudeRunner(model=synthesis_model)
+        else:
+            synthesizer = SimpleCodexRunner(model=synthesis_model)
+
+    return reviewer_names, runners, synthesizer
+
+
+def validate_review_runners(review_runners, synthesizer) -> Tuple[bool, str]:
+    """Validate selected CLIs and credentials after the filtering setup."""
+    for name, runner in review_runners.items():
+        if name == 'claude':
+            available, error = runner.validate_claude_available()
+        else:
+            available, error = runner.validate_codex_available()
+        if not available:
+            if name == 'claude':
+                return False, f"Claude Code not available: {error}"
+            return False, f"OpenAI Codex not available: {error}"
+
+    if synthesizer is not None:
+        if isinstance(synthesizer, SimpleClaudeRunner):
+            available, error = synthesizer.validate_claude_available()
+            name = 'claude'
+        else:
+            available, error = synthesizer.validate_codex_available()
+            name = 'openai'
+        if not available:
+            return False, f"{name} synthesizer not available: {error}"
+    return True, ""
+
+
+def write_provider_results(results: Dict[str, Dict[str, Any]]) -> None:
+    """Persist private provider JSON documents for debugging and artifacts."""
+    output_dir = Path(
+        os.environ.get('PROVIDER_RESULTS_DIR', 'claudecode/provider-results')
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for provider, result in results.items():
+        (output_dir / f"{provider}.json").write_text(
+            json.dumps(result, indent=2), encoding='utf-8'
+        )
 
 
 def initialize_findings_filter(custom_filtering_instructions: Optional[str] = None) -> FindingsFilter:
@@ -890,8 +1087,15 @@ def main():
         
         # Initialize components
         try:
-            github_client, claude_runner = initialize_clients()
-        except ConfigurationError as e:
+            try:
+                github_client = GitHubActionClient()
+            except Exception as error:
+                raise ConfigurationError(
+                    f"Failed to initialize GitHub client: {error}"
+                ) from error
+            reviewer_names, review_runners, synthesizer = initialize_review_runners()
+            logger.info(f"Configured reviewers: {', '.join(reviewer_names)}")
+        except (ConfigurationError, ReviewConfigurationError) as e:
             print(json.dumps({'error': str(e)}))
             sys.exit(EXIT_CONFIGURATION_ERROR)
             
@@ -901,11 +1105,12 @@ def main():
         except ConfigurationError as e:
             print(json.dumps({'error': str(e)}))
             sys.exit(EXIT_CONFIGURATION_ERROR)
-        
-        # Validate Claude Code is available
-        claude_ok, claude_error = claude_runner.validate_claude_available()
-        if not claude_ok:
-            print(json.dumps({'error': f'Claude Code not available: {claude_error}'}))
+
+        runners_available, runner_error = validate_review_runners(
+            review_runners, synthesizer
+        )
+        if not runners_available:
+            print(json.dumps({'error': runner_error}))
             sys.exit(EXIT_GENERAL_ERROR)
         
         # Parse max diff chars setting (with backward compatibility for max_diff_lines)
@@ -1018,7 +1223,19 @@ def main():
                 review_context=review_context,
                 diff_metadata=diff_metadata,
             )
-            return claude_runner.run_code_review(repo_dir, prompt_text), len(prompt_text)
+            try:
+                provider_results = run_reviewers(
+                    review_runners, repo_dir, prompt_text
+                )
+                write_provider_results(provider_results)
+                final_result = synthesize_reviews(
+                    provider_results, synthesizer, repo_dir
+                )
+                if len(provider_results) > 1:
+                    write_provider_results({'synthesized': final_result})
+                return (True, "", final_result), len(prompt_text)
+            except ReviewExecutionError as error:
+                return (False, str(error), {}), len(prompt_text)
 
         all_findings = []
         pr_summary_from_review = {}
@@ -1038,7 +1255,7 @@ def main():
                 (success, error_msg, review_results), prompt_len = run_review(include_diff=True)
 
             # Fallback to full agentic if prompt still too long
-            if not success and error_msg == "PROMPT_TOO_LONG":
+            if not success and "PROMPT_TOO_LONG" in error_msg:
                 logger.info(f"Prompt too long ({prompt_len} chars), falling back to full agentic mode")
                 (success, error_msg, review_results), prompt_len = run_review(include_diff=False)
 

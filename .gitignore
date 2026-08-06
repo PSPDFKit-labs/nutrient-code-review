@@ -10,6 +10,7 @@ __pycache__/
 # Output files
 *.csv
 *.json
+!claudecode/review-output.schema.json
 security_report.*
 
 # Virtual environments

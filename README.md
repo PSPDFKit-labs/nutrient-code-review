@@ -1,12 +1,14 @@
 # Nutrient Code Reviewer
 
-An AI-powered code review GitHub Action using Claude to analyze code changes. Uses a unified multi-agent approach for both code quality (correctness, reliability, performance, maintainability, testing) and security in a single pass. This action provides intelligent, context-aware review for pull requests using Anthropic's Claude Code tool for deep semantic analysis.
+An AI-powered code review GitHub Action that can run Claude, OpenAI Codex, or both against the same pull request. Every reviewer emits the same structured JSON document, and one provider-neutral publisher submits exactly one GitHub review.
 
 Based on the original work from [anthropics/claude-code-security-review](https://github.com/anthropics/claude-code-security-review).
 
 ## Features
 
-- **AI-Powered Analysis**: Uses Claude's advanced reasoning to detect issues with deep semantic understanding
+- **Configurable Reviewers**: Run Claude, OpenAI Codex, or both in parallel
+- **One Review Contract**: Reviewers and the optional synthesizer emit the same JSON schema
+- **One GitHub Review**: A single publisher combines the final summary and inline comments into one formal review
 - **Diff-Aware Scanning**: For PRs, only analyzes changed files
 - **PR Comments**: Automatically comments on PRs with findings
 - **Contextual Understanding**: Goes beyond pattern matching to understand code semantics and intent
@@ -95,9 +97,50 @@ jobs:
 
 **Note**: The `app-slug` parameter enables the bot to detect when it's mentioned in PR comments (e.g., `@my-code-review-app`). Requires `actions/create-github-app-token@v1.9.0` or later. `publish-check` additionally requires the GitHub App to have **Checks: read and write**. The action reacts to an accepted `review` command and creates the in-progress Check Run before checking out the repository.
 
+### Reviewer Selection and Synthesis
+
+Claude remains the default. Existing callers that only provide `claude-api-key` keep the same path: Claude emits the review JSON, filtering runs once, and the shared publisher posts it. Codex is not installed or invoked.
+
+```text
+claude  -> claude.json --------------------------> final JSON -> one publisher
+openai  -> openai.json --------------------------> final JSON -> one publisher
+claude  -> claude.json --+
+                         +-> synthesizer JSON ---> final JSON -> one publisher
+openai  -> openai.json --+
+```
+
+The contract is defined in [`claudecode/review-output.schema.json`](claudecode/review-output.schema.json). With two reviewers, both run concurrently after the single checkout. The configured synthesizer receives both documents and emits that same schema. If either selected reviewer or the synthesizer fails, the action fails instead of posting a misleading partial review. Raw provider and synthesis documents are retained in the private workflow artifact for debugging.
+
+**OpenAI only:**
+
+```yaml
+- uses: PSPDFKit-labs/nutrient-code-review@main
+  with:
+    reviewers: openai
+    openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+    openai-model: gpt-5.6-sol
+```
+
+**Claude and OpenAI, synthesized by Codex:**
+
+```yaml
+- uses: PSPDFKit-labs/nutrient-code-review@main
+  with:
+    reviewers: claude,openai
+    claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+    openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+    openai-model: gpt-5.6-sol
+    synthesizer-provider: openai
+    synthesizer-model: gpt-5.6-terra
+```
+
+The synthesizer provider and model are configurable. A Claude synthesizer can be selected with `synthesizer-provider: claude` and a compatible `synthesizer-model`. Synthesis is skipped entirely when only one reviewer is selected.
+
 ## Security Considerations
 
 This action is not hardened against prompt injection attacks and should only be used to review trusted PRs. We recommend [configuring your repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#controlling-changes-from-forks-to-workflows-in-public-repositories) to use the "Require approval for all external contributors" option to ensure workflows only run after a maintainer has reviewed the PR.
+
+Review agents do not receive the GitHub token. When both providers run, each child process receives only its own provider credential; the Claude process does not receive the OpenAI key and the Codex process does not receive the Anthropic key. Codex runs non-interactively with an ephemeral session and a read-only sandbox. These are process-level controls on the same Actions runner, not a separate VM security boundary.
 
 ## Configuration Options
 
@@ -105,7 +148,12 @@ This action is not hardened against prompt injection attacks and should only be 
 
 | Input | Description | Default | Required |
 |-------|-------------|---------|----------|
-| `claude-api-key` | Anthropic Claude API key for code review analysis. <br>*Note*: This API key needs to be enabled for both the Claude API and Claude Code usage. | None | Yes |
+| `reviewers` | Comma-separated reviewers: `claude`, `openai`, or `claude,openai`. | `claude` | No |
+| `claude-api-key` | Anthropic Claude API key. Required only when Claude is selected as a reviewer or synthesizer. | None | Conditional |
+| `openai-api-key` | OpenAI API key. Required only when OpenAI is selected as a reviewer or synthesizer. | None | Conditional |
+| `openai-model` | Codex model used by the OpenAI reviewer. | `gpt-5.6-sol` | No |
+| `synthesizer-provider` | Provider used to combine multiple review documents: `openai` or `claude`. Ignored for one reviewer. | `openai` | No |
+| `synthesizer-model` | Model used to combine multiple review documents. Ignored for one reviewer. | `gpt-5.6-terra` | No |
 | `comment-pr` | Whether to comment on PRs with findings | `true` | No |
 | `review-mode` | How to post the review on the PR. `approve-reject` submits an `APPROVE` or `REQUEST_CHANGES` verdict based on findings; `comment-only` posts the same inline comments and summary as a non-blocking `COMMENT` review with no verdict. | `approve-reject` | No |
 | `upload-results` | Whether to upload results as artifacts | `true` | No |
@@ -356,6 +404,9 @@ This is especially important if you use `workflow_dispatch` or other event types
 ```
 claudecode/
 ├── github_action_audit.py  # Main audit script for GitHub Actions
+├── review_ensemble.py      # Parallel reviewers and optional synthesis
+├── review-output.schema.json # Shared reviewer/synthesizer contract
+├── review_schema.py        # Loads the shared schema for Python callers
 ├── prompts.py              # Code review prompt templates
 ├── findings_filter.py      # False positive filtering logic
 ├── claude_api_client.py    # Claude API client for false positive filtering
@@ -367,11 +418,11 @@ claudecode/
 
 ### Workflow
 
-1. **PR Analysis**: When a pull request is opened, Claude analyzes the diff to understand what changed
-2. **Contextual Review**: Claude examines the code changes in context, understanding the purpose and potential impacts
-3. **Finding Generation**: Issues are identified with detailed explanations, severity ratings, and remediation guidance
-4. **False Positive Filtering**: Advanced filtering removes low-impact or false positive prone findings to reduce noise
-5. **PR Comments**: Findings are posted as review comments on the specific lines of code
+1. **PR Analysis**: Each selected reviewer receives the same diff and repository checkout
+2. **Structured Output**: Every reviewer writes the shared review JSON format
+3. **Optional Synthesis**: Multiple reviewer documents are combined into one document of the same format
+4. **False Positive Filtering**: Filtering runs once over the final document
+5. **PR Review**: The shared publisher submits one summary and one set of inline comments
 
 ## Review Capabilities
 

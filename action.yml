@@ -1,5 +1,5 @@
-name: 'Claude Code Reviewer'
-description: 'AI-powered code review GitHub Action using Claude. Unified multi-agent review for code quality and security.'
+name: 'Nutrient Code Reviewer'
+description: 'Configurable AI code review with one provider-neutral GitHub review.'
 author: 'Nutrient'
 
 inputs:
@@ -25,13 +25,38 @@ inputs:
 
   claude-api-key:
     description: 'Anthropic Claude API key for code review analysis'
-    required: true
+    required: false
     default: ''
 
   claude-model:
     description: 'Claude model to use for code review analysis (e.g., claude-sonnet-4-6)'
     required: false
     default: ''
+
+  reviewers:
+    description: 'Comma-separated review agents to run: claude, openai, or claude,openai'
+    required: false
+    default: 'claude'
+
+  openai-api-key:
+    description: 'OpenAI API key. Required only when openai is selected as a reviewer or synthesizer.'
+    required: false
+    default: ''
+
+  openai-model:
+    description: 'Codex model used by the OpenAI reviewer.'
+    required: false
+    default: 'gpt-5.6-sol'
+
+  synthesizer-provider:
+    description: 'Provider used to combine multiple review JSON documents: openai or claude.'
+    required: false
+    default: 'openai'
+
+  synthesizer-model:
+    description: 'Model used to combine multiple reviews. Ignored when only one reviewer is selected.'
+    required: false
+    default: 'gpt-5.6-terra'
 
   run-every-commit:
     description: 'DEPRECATED: Use trigger-on-commit instead. Run ClaudeCode on every commit (skips cache check). Warning: This may lead to more false positives on PRs with many commits as the AI analyzes the same code multiple times.'
@@ -242,9 +267,7 @@ runs:
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: .claudecode-marker
-        key: claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
-        restore-keys: |
-          claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-
+        key: claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}-${{ inputs.reviewers }}-${{ inputs.claude-model || 'default' }}-${{ inputs.openai-model }}-${{ inputs.synthesizer-provider }}-${{ inputs.synthesizer-model }}
 
     - name: Detect trigger type
       id: trigger-detection
@@ -391,7 +414,7 @@ runs:
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         path: .claudecode-marker
-        key: claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha || github.sha }}
+        key: claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha || github.sha }}-${{ inputs.reviewers }}-${{ inputs.claude-model || 'default' }}-${{ inputs.openai-model }}-${{ inputs.synthesizer-provider }}-${{ inputs.synthesizer-model }}
 
     - name: Set up Python
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
@@ -460,14 +483,24 @@ runs:
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
+        REVIEWERS: ${{ inputs.reviewers }}
       run: |
+        set -euo pipefail
         echo "::group::Install Deps"
         pip install -r "$ACTION_PATH/claudecode/requirements.txt"
-        npm install -g @anthropic-ai/claude-code
+
+        NORMALIZED_REVIEWERS=",${REVIEWERS//[[:space:]]/},"
+        if [[ "$NORMALIZED_REVIEWERS" == *,claude,* ]]; then
+          npm install -g @anthropic-ai/claude-code
+        fi
+        if [[ "$NORMALIZED_REVIEWERS" == *,openai,* ]]; then
+          npm install -g @openai/codex
+        fi
+
         sudo apt-get update && sudo apt-get install -y jq
         echo "::endgroup::"
 
-    - name: Run ClaudeCode scan
+    - name: Run configured code review
       id: claudecode-scan
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
       shell: bash
@@ -476,6 +509,11 @@ runs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}
         ANTHROPIC_API_KEY: ${{ inputs.claude-api-key }}
+        CODEX_API_KEY: ${{ inputs.openai-api-key }}
+        REVIEWERS: ${{ inputs.reviewers }}
+        OPENAI_MODEL: ${{ inputs.openai-model }}
+        SYNTHESIZER_PROVIDER: ${{ inputs.synthesizer-provider }}
+        SYNTHESIZER_MODEL: ${{ inputs.synthesizer-model }}
         ENABLE_CLAUDE_FILTERING: ${{ inputs.enable-claude-filtering }}
         ENABLE_HEURISTIC_FILTERING: ${{ inputs.enable-heuristic-filtering }}
         EXCLUDE_DIRECTORIES: ${{ inputs.exclude-directories }}
@@ -487,8 +525,10 @@ runs:
         MAX_DIFF_CHARS: ${{ inputs.max-diff-chars }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
         ACTION_PATH: ${{ github.action_path }}
+        PROVIDER_RESULTS_DIR: ${{ github.action_path }}/claudecode/provider-results
       run: |
-        echo "Running ClaudeCode AI code review analysis..."
+        set -u
+        echo "Running configured AI code review analysis..."
         echo "----------------------------------------"
 
         # Initialize outputs
@@ -501,37 +541,42 @@ runs:
           exit 0
         fi
         
-        # Validate API key is provided
-        if [ -z "$ANTHROPIC_API_KEY" ]; then
-          echo "::error::ANTHROPIC_API_KEY is not set. Please provide the claude-api-key input to the action."
-          echo "Example usage:"
-          echo "  - uses: PSPDFKit-labs/nutrient-code-review@main"
-          echo "    with:"
-          echo "      claude-api-key: \$\{{ secrets.ANTHROPIC_API_KEY }}"
+        NORMALIZED_REVIEWERS=",${REVIEWERS//[[:space:]]/},"
+        if [[ "$NORMALIZED_REVIEWERS" == *,claude,* ]] && [ -z "$ANTHROPIC_API_KEY" ]; then
+          echo "::error::claude is selected but claude-api-key is empty"
+          exit 1
+        fi
+        if [[ "$NORMALIZED_REVIEWERS" == *,openai,* ]] && [ -z "$CODEX_API_KEY" ]; then
+          echo "::error::openai is selected but openai-api-key is empty"
           exit 1
         fi
                 
         # Set timeout
         export CLAUDE_TIMEOUT="$CLAUDECODE_TIMEOUT"
         
-        # Run ClaudeCode audit with verbose debugging
+        # Run the configured reviewer ensemble with verbose debugging
         export REPO_PATH=$(pwd)
         cd "$ACTION_PATH"
         
         # Enable verbose debugging
-        echo "::group::ClaudeCode Environment"
+        echo "::group::Review Environment"
         echo "Current directory: $(pwd)"
         echo "Python version: $(python --version)"
-        echo "Claude CLI version: $(claude --version 2>&1 || echo 'Claude CLI not found')"
-        echo "ANTHROPIC_API_KEY set: $(if [ -n "$ANTHROPIC_API_KEY" ]; then echo 'Yes'; else echo 'No'; fi)"
+        echo "Reviewers: $REVIEWERS"
+        if [[ "$NORMALIZED_REVIEWERS" == *,claude,* ]]; then
+          echo "Claude CLI version: $(claude --version 2>&1 || echo 'Claude CLI not found')"
+        fi
+        if [[ "$NORMALIZED_REVIEWERS" == *,openai,* ]]; then
+          echo "Codex CLI version: $(codex --version 2>&1 || echo 'Codex CLI not found')"
+        fi
         echo "GITHUB_REPOSITORY: $GITHUB_REPOSITORY"
         echo "PR_NUMBER: $PR_NUMBER"
-        echo "Python path: $PYTHONPATH"
+        echo "Python path: ${PYTHONPATH:-}"
         echo "Files in claudecode directory:"
         ls -la claudecode/
         echo "::endgroup::"
         
-        echo "::group::ClaudeCode Execution"
+        echo "::group::Review Execution"
         # Add current directory to Python path so it can find the claudecode module
         export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$(pwd)"
         echo "Updated PYTHONPATH: $PYTHONPATH"
@@ -539,50 +584,51 @@ runs:
         # Run from the action root directory so Python can find the claudecode module
         python -u claudecode/github_action_audit.py > claudecode/claudecode-results.json 2>claudecode/claudecode-error.log || CLAUDECODE_EXIT_CODE=$?
         
-        if [ -n "$CLAUDECODE_EXIT_CODE" ]; then
-          echo "::warning::ClaudeCode exited with code $CLAUDECODE_EXIT_CODE"
+        if [ -n "${CLAUDECODE_EXIT_CODE:-}" ]; then
+          echo "::warning::Code review exited with code $CLAUDECODE_EXIT_CODE"
         else
-          echo "ClaudeCode scan completed successfully"
+          echo "Code review completed successfully"
         fi
         
-        # Parse ClaudeCode results and count findings regardless of exit code
+        # Parse the provider-neutral final review and count findings regardless of exit code
         if [ -f claudecode/claudecode-results.json ]; then
           FILE_SIZE=$(wc -c < claudecode/claudecode-results.json)
-          echo "ClaudeCode results file size: $FILE_SIZE bytes"
+          echo "Review results file size: $FILE_SIZE bytes"
           
           # Check if file is empty or too small
           if [ "$FILE_SIZE" -lt 2 ]; then
-            echo "::warning::ClaudeCode results file is empty or invalid (size: $FILE_SIZE bytes)"
-            echo "::warning::ClaudeCode may have failed silently. Check claudecode-error.log"
+            echo "::warning::Review results file is empty or invalid (size: $FILE_SIZE bytes)"
+            echo "::warning::The review may have failed silently. Check claudecode-error.log"
             if [ -f claudecode/claudecode-error.log ]; then
               echo "Error log contents:"
               cat claudecode/claudecode-error.log
             fi
             echo "findings_count=0" >> $GITHUB_OUTPUT
           else
-            echo "ClaudeCode results preview:"
+            echo "Review results preview:"
             head -n 300 claudecode/claudecode-results.json || echo "Unable to preview results"
                         
             # Check if the result is an error
             if jq -e '.error' claudecode/claudecode-results.json > /dev/null 2>&1; then
               ERROR_MSG=$(jq -r '.error' claudecode/claudecode-results.json)
-              echo "::warning::ClaudeCode error: $ERROR_MSG"
+              echo "::warning::Code review error: $ERROR_MSG"
               echo "findings_count=0" >> $GITHUB_OUTPUT
             else
               # Use -r to get raw output and handle potential null/missing findings array
               CLAUDECODE_FINDINGS_COUNT=$(jq -r '.findings | if . == null then 0 else length end' claudecode/claudecode-results.json 2>/dev/null || echo "0")
               echo "::debug::Extracted ClaudeCode findings count: $CLAUDECODE_FINDINGS_COUNT"
               echo "findings_count=$CLAUDECODE_FINDINGS_COUNT" >> $GITHUB_OUTPUT
-              echo "ClaudeCode found $CLAUDECODE_FINDINGS_COUNT review issues"
+              echo "Code review found $CLAUDECODE_FINDINGS_COUNT review issues"
               
-              # Also create findings.json and pr-summary.json for PR comment script
+              # Retain legacy split files for downstream callers. The built-in
+              # publisher reads the complete review JSON directly.
               jq '.findings // []' claudecode/claudecode-results.json > findings.json || echo '[]' > findings.json
               jq '.pr_summary // {}' claudecode/claudecode-results.json > pr-summary.json || echo '{}' > pr-summary.json
               jq '.analysis_summary // {}' claudecode/claudecode-results.json > analysis-summary.json || echo '{}' > analysis-summary.json
             fi
           fi
         else
-          echo "::warning::ClaudeCode results file not found"
+          echo "::warning::Review results file not found"
           if [ -f claudecode/claudecode-error.log ]; then
             echo "Error log contents:"
             cat claudecode/claudecode-error.log
@@ -607,6 +653,9 @@ runs:
         if [ -f claudecode/claudecode-error.log ]; then
           cp claudecode/claudecode-error.log ${{ github.workspace }}/claudecode-error.log || true
         fi
+        if [ -d claudecode/provider-results ]; then
+          cp -R claudecode/provider-results ${{ github.workspace }}/provider-results || true
+        fi
         
         echo "::endgroup::"
     
@@ -620,6 +669,7 @@ runs:
           findings.json
           claudecode-results.json
           claudecode-error.log
+          provider-results/
         retention-days: 7
         if-no-files-found: ignore
 
@@ -631,6 +681,7 @@ runs:
         CLAUDECODE_FINDINGS: ${{ steps.claudecode-scan.outputs.findings_count }}
         SILENCE_CLAUDECODE_COMMENTS: ${{ steps.claudecode-check.outputs.silence_claudecode_comments }}
         ACTION_PATH: ${{ github.action_path }}
+        REVIEW_RESULTS_FILE: ${{ github.workspace }}/claudecode-results.json
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
         REVIEW_MODE: ${{ inputs.review-mode }}
       run: |

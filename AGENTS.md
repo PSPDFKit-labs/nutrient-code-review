@@ -2,13 +2,16 @@
 
 ## Project Overview
 
-AI-powered code review tool using Claude to analyze PRs for code quality and security issues. Uses a unified multi-agent approach for comprehensive analysis in a single pass.
+AI-powered code review tool using configurable Claude and OpenAI reviewers to analyze PRs for code quality and security issues. All model calls share one structured review schema and one GitHub review publisher.
 
 ## Architecture
 
 ```
 claudecode/
 ├── github_action_audit.py   # Main orchestrator - entry point
+├── review_ensemble.py       # Parallel reviewer and synthesis orchestration
+├── review-output.schema.json # Shared model output contract
+├── review_schema.py         # Python schema loader
 ├── prompts.py               # Review prompt templates
 ├── findings_filter.py       # False positive filtering
 ├── claude_api_client.py     # Claude API client
