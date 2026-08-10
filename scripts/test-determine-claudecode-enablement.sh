@@ -293,6 +293,58 @@ EOF
     teardown_test
 }
 
+test_sha_deduplication_same_sha_review_comment() {
+    echo "Test: SHA deduplication with same SHA (review comment)"
+    setup_test
+
+    mkdir -p .claudecode-marker
+    cat > .claudecode-marker/marker.json << EOF
+{
+  "sha": "abc123"
+}
+EOF
+
+    export GITHUB_EVENT_NAME="issue_comment"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="slash_command"
+    export TRIGGER_ON_REVIEW_COMMAND="true"
+    export IS_PR="true"
+
+    run_script
+
+    assert_equals "false" "$ENABLE_CLAUDECODE" "Should skip a review comment after a successful review of the same SHA"
+
+    rm -rf .claudecode-marker
+    teardown_test
+}
+
+test_sha_deduplication_same_sha_mention() {
+    echo "Test: SHA deduplication with same SHA (bot mention)"
+    setup_test
+
+    mkdir -p .claudecode-marker
+    cat > .claudecode-marker/marker.json << EOF
+{
+  "sha": "abc123"
+}
+EOF
+
+    export GITHUB_EVENT_NAME="issue_comment"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="mention"
+    export TRIGGER_ON_MENTION="true"
+    export IS_PR="true"
+
+    run_script
+
+    assert_equals "false" "$ENABLE_CLAUDECODE" "Should skip a bot mention after a successful review of the same SHA"
+
+    rm -rf .claudecode-marker
+    teardown_test
+}
+
 test_required_label_present() {
     echo "Test: Required label is present"
     setup_test
@@ -597,6 +649,8 @@ test_skip_draft_prs_commit_still_skipped
 test_sha_deduplication_different_sha
 test_sha_deduplication_same_sha_non_review
 test_sha_deduplication_same_sha_review_request
+test_sha_deduplication_same_sha_review_comment
+test_sha_deduplication_same_sha_mention
 test_required_label_present
 test_required_label_missing
 test_skip_draft_prs_enabled
