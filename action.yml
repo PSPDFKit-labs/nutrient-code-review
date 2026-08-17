@@ -494,6 +494,7 @@ runs:
         # Initialize outputs
         echo "findings_count=0" >> $GITHUB_OUTPUT
         echo "results_file=claudecode/claudecode-results.json" >> $GITHUB_OUTPUT
+        echo "scan_failed=false" >> $GITHUB_OUTPUT
 
         # Skip ClaudeCode if not a PR or issue_comment event
         if [ "${{ github.event_name }}" != "pull_request" ] && [ "${{ github.event_name }}" != "issue_comment" ]; then
@@ -559,6 +560,7 @@ runs:
               cat claudecode/claudecode-error.log
             fi
             echo "findings_count=0" >> $GITHUB_OUTPUT
+            echo "scan_failed=true" >> $GITHUB_OUTPUT
           else
             echo "ClaudeCode results preview:"
             head -n 300 claudecode/claudecode-results.json || echo "Unable to preview results"
@@ -568,6 +570,11 @@ runs:
               ERROR_MSG=$(jq -r '.error' claudecode/claudecode-results.json)
               echo "::warning::ClaudeCode error: $ERROR_MSG"
               echo "findings_count=0" >> $GITHUB_OUTPUT
+              echo "scan_failed=true" >> $GITHUB_OUTPUT
+            elif ! jq -e 'type == "object" and has("findings") and has("pr_summary") and has("analysis_summary")' claudecode/claudecode-results.json > /dev/null 2>&1; then
+              echo "::warning::ClaudeCode returned an invalid results payload"
+              echo "findings_count=0" >> $GITHUB_OUTPUT
+              echo "scan_failed=true" >> $GITHUB_OUTPUT
             else
               # Use -r to get raw output and handle potential null/missing findings array
               CLAUDECODE_FINDINGS_COUNT=$(jq -r '.findings | if . == null then 0 else length end' claudecode/claudecode-results.json 2>/dev/null || echo "0")
@@ -588,6 +595,7 @@ runs:
             cat claudecode/claudecode-error.log
           fi
           echo "findings_count=0" >> $GITHUB_OUTPUT
+          echo "scan_failed=true" >> $GITHUB_OUTPUT
         fi
         
         # Always copy files to workspace root regardless of the outcome
@@ -624,7 +632,7 @@ runs:
         if-no-files-found: ignore
 
     - name: Comment PR with findings
-      if: (github.event_name == 'pull_request' || github.event_name == 'issue_comment') && inputs.comment-pr == 'true' && steps.claudecode-check.outputs.enable_claudecode == 'true'
+      if: (github.event_name == 'pull_request' || github.event_name == 'issue_comment') && inputs.comment-pr == 'true' && steps.claudecode-check.outputs.enable_claudecode == 'true' && steps.claudecode-scan.outputs.scan_failed != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
@@ -637,7 +645,7 @@ runs:
         node "$ACTION_PATH/scripts/comment-pr-findings.js"
 
     - name: Add completion reaction for /review command
-      if: success() && github.event_name == 'issue_comment' && steps.trigger-detection.outputs.trigger_type == 'slash_command' && steps.claudecode-check.outputs.enable_claudecode == 'true'
+      if: success() && github.event_name == 'issue_comment' && steps.trigger-detection.outputs.trigger_type == 'slash_command' && steps.claudecode-check.outputs.enable_claudecode == 'true' && steps.claudecode-scan.outputs.scan_failed != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
@@ -659,7 +667,7 @@ runs:
         CHECK_RUN_OPERATION: complete
         CHECK_RUN_ID: ${{ steps.check-run-start.outputs.check_run_id }}
         CHECK_NAME: ${{ inputs.check-name }}
-        CHECK_CONCLUSION: ${{ job.status }}
+        CHECK_CONCLUSION: ${{ steps.claudecode-scan.outputs.scan_failed == 'true' && 'failure' || job.status }}
         PR_NUMBER: ${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}
         DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       with:
@@ -671,6 +679,13 @@ runs:
           } catch (error) {
             core.warning(error.message)
           }
+
+    - name: Fail workflow when ClaudeCode scan fails
+      if: always() && steps.claudecode-check.outputs.enable_claudecode == 'true' && steps.claudecode-scan.outputs.scan_failed == 'true'
+      shell: bash
+      run: |
+        echo "::error::ClaudeCode scan failed. See claudecode-results.json or claudecode-error.log for details."
+        exit 1
 
 branding:
   icon: 'shield'
