@@ -289,7 +289,7 @@ class TestSimpleClaudeRunner:
         assert results == {}
     
     @patch('subprocess.run')
-    def test_run_code_review_json_parse_failure_with_retry(self, mock_run):
+    def test_run_code_review_json_parse_failure_with_retry(self, mock_run, capsys):
         """Test JSON parse failure with retry."""
         mock_run.side_effect = [
             Mock(returncode=0, stdout='Invalid JSON', stderr=''),
@@ -303,8 +303,11 @@ class TestSimpleClaudeRunner:
                 "test prompt"
             )
         
+        captured = capsys.readouterr()
         assert success is False
         assert 'Failed to parse Claude output' in error
+        assert 'Still invalid' in error
+        assert 'Failed to parse Claude stdout as JSON' in captured.err
         assert mock_run.call_count == 2
 
     @patch('subprocess.run')

@@ -386,13 +386,6 @@ runs:
         EOF
         echo "Created ClaudeCode reservation marker for PR #$PR_NUMBER (trigger: $TRIGGER_TYPE, SHA: $SHA)"
 
-    - name: Save ClaudeCode reservation to cache
-      if: steps.claudecode-check.outputs.enable_claudecode == 'true'
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-      with:
-        path: .claudecode-marker
-        key: claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha || github.sha }}
-
     - name: Set up Python
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
       uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -617,6 +610,23 @@ runs:
         fi
         
         echo "::endgroup::"
+
+    - name: Mark ClaudeCode reservation as completed
+      if: steps.claudecode-check.outputs.enable_claudecode == 'true' && steps.claudecode-scan.outputs.scan_failed != 'true'
+      shell: bash
+      run: |
+        if [ -f .claudecode-marker/marker.json ]; then
+          tmp_file=$(mktemp)
+          jq '.status = "completed"' .claudecode-marker/marker.json > "$tmp_file"
+          mv "$tmp_file" .claudecode-marker/marker.json
+        fi
+
+    - name: Save ClaudeCode reservation to cache
+      if: steps.claudecode-check.outputs.enable_claudecode == 'true' && steps.claudecode-scan.outputs.scan_failed != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: .claudecode-marker
+        key: claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha || github.sha }}
     
 
     - name: Upload scan results

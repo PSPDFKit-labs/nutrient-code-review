@@ -533,6 +533,8 @@ class SimpleClaudeRunner:
             print(f"[Warning] Large prompt size: {prompt_size / 1024 / 1024:.2f}MB", file=sys.stderr)
         
         try:
+            last_parse_error = None
+
             # Construct Claude Code command
             # Use stdin for prompt to avoid "argument list too long" error
             cmd = [
@@ -560,9 +562,15 @@ class SimpleClaudeRunner:
                 try:
                     parsed_result = json.loads(result.stdout)
                     success = True
-                except json.JSONDecodeError:
+                    last_parse_error = None
+                except json.JSONDecodeError as parse_error:
                     success = False
                     parsed_result = None
+                    last_parse_error = (
+                        f"Failed to parse Claude stdout as JSON ({parse_error}). "
+                        f"Raw output (first 2000 chars): {result.stdout[:2000]!r}"
+                    )
+                    print(f"[Error] {last_parse_error}", file=sys.stderr)
 
                 if success:
                     # Check for "Prompt is too long" error that should trigger fallback to agentic mode
@@ -607,7 +615,10 @@ class SimpleClaudeRunner:
                 if attempt == 0:
                     continue  # Retry once
                 else:
-                    return False, "Failed to parse Claude output", {}
+                    error_msg = "Failed to parse Claude output"
+                    if last_parse_error:
+                        error_msg += f": {last_parse_error}"
+                    return False, error_msg, {}
             
             return False, "Unexpected error in retry logic", {}
             
