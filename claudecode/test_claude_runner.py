@@ -289,7 +289,7 @@ class TestSimpleClaudeRunner:
         assert results == {}
     
     @patch('subprocess.run')
-    def test_run_code_review_json_parse_failure_with_retry(self, mock_run):
+    def test_run_code_review_json_parse_failure_with_retry(self, mock_run, capsys):
         """Test JSON parse failure with retry."""
         mock_run.side_effect = [
             Mock(returncode=0, stdout='Invalid JSON', stderr=''),
@@ -303,8 +303,37 @@ class TestSimpleClaudeRunner:
                 "test prompt"
             )
         
+        captured = capsys.readouterr()
         assert success is False
         assert 'Failed to parse Claude output' in error
+        assert 'Still invalid' in error
+        assert 'Failed to parse Claude stdout as JSON' in captured.err
+        assert mock_run.call_count == 2
+
+    @patch('subprocess.run')
+    def test_run_code_review_rejects_mixed_stdout_even_with_embedded_json(self, mock_run):
+        """Test that mixed stdout is rejected even if it contains valid JSON."""
+        findings_data = {
+            "pr_summary": {"overview": "Test PR summary", "file_changes": []},
+            "findings": []
+        }
+        mixed_stdout = f"debug log\n```json\n{json.dumps({'result': json.dumps(findings_data)})}\n```"
+
+        mock_run.side_effect = [
+            Mock(returncode=0, stdout=mixed_stdout, stderr=''),
+            Mock(returncode=0, stdout=mixed_stdout, stderr='')
+        ]
+
+        runner = SimpleClaudeRunner()
+        with patch('pathlib.Path.exists', return_value=True):
+            success, error, results = runner.run_code_review(
+                Path('/tmp/test'),
+                "test prompt"
+            )
+
+        assert success is False
+        assert 'Failed to parse Claude output' in error
+        assert results == {}
         assert mock_run.call_count == 2
     
     def test_extract_review_findings_claude_wrapper(self):

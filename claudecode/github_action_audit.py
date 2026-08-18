@@ -17,7 +17,6 @@ import time
 # Import existing components we can reuse
 from claudecode.prompts import get_unified_review_prompt
 from claudecode.findings_filter import FindingsFilter
-from claudecode.json_parser import parse_json_with_fallbacks
 from claudecode.format_pr_comments import format_pr_comments_for_prompt, is_bot_comment
 from claudecode.constants import (
     EXIT_CONFIGURATION_ERROR,
@@ -534,6 +533,8 @@ class SimpleClaudeRunner:
             print(f"[Warning] Large prompt size: {prompt_size / 1024 / 1024:.2f}MB", file=sys.stderr)
         
         try:
+            last_parse_error = None
+
             # Construct Claude Code command
             # Use stdin for prompt to avoid "argument list too long" error
             cmd = [
@@ -556,8 +557,20 @@ class SimpleClaudeRunner:
                     timeout=self.timeout_seconds
                 )
 
-                # Parse JSON output (even if returncode != 0, to detect specific errors)
-                success, parsed_result = parse_json_with_fallbacks(result.stdout, "Claude Code output")
+                # Parse JSON output strictly. Claude CLI was invoked with --output-format json,
+                # so any non-JSON stdout is treated as a hard failure.
+                try:
+                    parsed_result = json.loads(result.stdout)
+                    success = True
+                    last_parse_error = None
+                except json.JSONDecodeError as parse_error:
+                    success = False
+                    parsed_result = None
+                    last_parse_error = (
+                        f"Failed to parse Claude stdout as JSON ({parse_error}). "
+                        f"Raw output (first 2000 chars): {result.stdout[:2000]!r}"
+                    )
+                    print(f"[Error] {last_parse_error}", file=sys.stderr)
 
                 if success:
                     # Check for "Prompt is too long" error that should trigger fallback to agentic mode
@@ -602,7 +615,10 @@ class SimpleClaudeRunner:
                 if attempt == 0:
                     continue  # Retry once
                 else:
-                    return False, "Failed to parse Claude output", {}
+                    error_msg = "Failed to parse Claude output"
+                    if last_parse_error:
+                        error_msg += f": {last_parse_error}"
+                    return False, error_msg, {}
             
             return False, "Unexpected error in retry logic", {}
             
@@ -628,8 +644,11 @@ class SimpleClaudeRunner:
         # is serialized into the result field.
         result_text = claude_output.get('result')
         if isinstance(result_text, str):
-            success, result_json = parse_json_with_fallbacks(result_text, "Claude result text")
-            if success and result_json and 'findings' in result_json and 'pr_summary' in result_json:
+            try:
+                result_json = json.loads(result_text)
+            except json.JSONDecodeError:
+                result_json = None
+            if isinstance(result_json, dict) and 'findings' in result_json and 'pr_summary' in result_json:
                 return result_json
 
         raise ValueError(
