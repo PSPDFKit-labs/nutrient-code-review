@@ -97,7 +97,7 @@ jobs:
 
 ## Security Considerations
 
-This action is not hardened against prompt injection attacks and should only be used to review trusted PRs. We recommend [configuring your repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#controlling-changes-from-forks-to-workflows-in-public-repositories) to use the "Require approval for all external contributors" option to ensure workflows only run after a maintainer has reviewed the PR.
+This action includes several defense-in-depth mitigations against prompt injection: GitHub credentials are removed from the review subprocess environment and from the checkout's git config before analysis, the subprocess's shell access is restricted to an allowlist of read-only git commands (with network tools additionally denylisted), and the review prompt instructs Claude to treat instructions embedded in PR content as a malicious signal to report rather than follow. These measures raise the bar but are not a sandbox and cannot eliminate prompt-injection risk — the action should still only be used to review trusted PRs. We recommend [configuring your repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#controlling-changes-from-forks-to-workflows-in-public-repositories) to use the "Require approval for all external contributors" option to ensure workflows only run after a maintainer has reviewed the PR.
 
 ## Configuration Options
 

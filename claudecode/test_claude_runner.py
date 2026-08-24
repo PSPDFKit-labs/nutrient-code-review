@@ -170,11 +170,53 @@ class TestSimpleClaudeRunner:
         assert 'json' in cmd
         assert '--model' in cmd
         assert DEFAULT_CLAUDE_MODEL in cmd
+        assert '--allowed-tools' in cmd
+        allowed = cmd[cmd.index('--allowed-tools') + 1]
+        assert 'Bash(git diff:*)' in allowed
+        assert 'Bash(git log:*)' in allowed
+        assert 'Bash(git show:*)' in allowed
         assert '--disallowed-tools' in cmd
-        assert 'Bash(ps:*)' in cmd
+        disallowed = cmd[cmd.index('--disallowed-tools') + 1]
+        assert 'Bash(ps:*)' in disallowed
+        assert 'Bash(curl:*)' in disallowed
+        assert 'Bash(wget:*)' in disallowed
+        assert 'WebFetch' in disallowed
+        assert 'WebSearch' in disallowed
         assert '--json-schema' in cmd
         assert call_args[1]['input'] == 'test prompt'
         assert call_args[1]['cwd'] == Path('/tmp/test')
+
+    @patch('subprocess.run')
+    def test_run_code_review_strips_github_credentials(self, mock_run):
+        """The Claude subprocess must not inherit GitHub credentials."""
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({
+                "type": "result",
+                "subtype": "success",
+                "structured_output": {
+                    "pr_summary": {"overview": "Test", "file_changes": []},
+                    "findings": [],
+                }
+            }),
+            stderr=''
+        )
+
+        runner = SimpleClaudeRunner()
+        env_overrides = {
+            'GITHUB_TOKEN': 'ghp_secret',
+            'GH_TOKEN': 'ghp_secret2',
+            'ANTHROPIC_API_KEY': 'sk-ant-test',
+        }
+        with patch.dict(os.environ, env_overrides):
+            with patch('pathlib.Path.exists', return_value=True):
+                success, error, results = runner.run_code_review(Path('/tmp/test'), "prompt")
+
+        assert success is True
+        subprocess_env = mock_run.call_args[1]['env']
+        assert 'GITHUB_TOKEN' not in subprocess_env
+        assert 'GH_TOKEN' not in subprocess_env
+        assert subprocess_env.get('ANTHROPIC_API_KEY') == 'sk-ant-test'
     
     @patch('subprocess.run')
     def test_run_code_review_large_prompt_warning(self, mock_run, capsys):

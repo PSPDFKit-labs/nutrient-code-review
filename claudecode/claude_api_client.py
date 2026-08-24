@@ -11,6 +11,7 @@ from anthropic import Anthropic
 from claudecode.constants import (
     DEFAULT_CLAUDE_MODEL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_RETRIES,
     RATE_LIMIT_BACKOFF_MAX, PROMPT_TOKEN_LIMIT,
+    FILTER_FILE_CONTEXT_LINES, FILTER_FILE_MAX_CHARS,
 )
 from claudecode.json_parser import parse_json_with_fallbacks
 from claudecode.logger import get_logger
@@ -52,14 +53,18 @@ class ClaudeAPIClient:
     
     def validate_api_access(self) -> Tuple[bool, str]:
         """Validate that API access is working.
-        
+
+        Pings the same model used for filtering, so a misconfigured or
+        retired CLAUDE_MODEL is caught here instead of silently failing
+        (fail-open) on every per-finding call later.
+
         Returns:
             Tuple of (success, error_message)
         """
         try:
             # Simple test call to verify API access
             self.client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model=self.model,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Hello"}],
                 timeout=10
@@ -216,15 +221,16 @@ PR Context:
 - Description: {(pr_context.get('description') or 'No description')[:500]}...
 """
         
-        # Get file content if available
+        # Get file content if available (windowed around the finding line,
+        # with line numbers so the model can verify the flagged location)
         file_path = finding.get('file', '')
         file_content = ""
         if file_path:
-            success, content, error = self._read_file(file_path)
+            success, content, error = self._read_file(file_path, focus_line=finding.get('line'))
             if success:
                 file_content = f"""
 
-File Content ({file_path}):
+File Content ({file_path}, with line numbers):
 ```
 {content}
 ```"""
@@ -289,12 +295,17 @@ Respond with EXACTLY this JSON structure (no markdown, no code blocks):
 }}"""
 
     
-    def _read_file(self, file_path: str) -> Tuple[bool, str, str]:
+    def _read_file(self, file_path: str, focus_line: Optional[int] = None) -> Tuple[bool, str, str]:
         """Read a file and format it with line numbers.
-        
+
+        Large files are windowed around focus_line (or truncated from the top
+        when no focus line is given) so a single huge file can't blow up the
+        filter prompt.
+
         Args:
             file_path: Path to the file to read
-            
+            focus_line: Optional 1-based line number to center the window on
+
         Returns:
             Tuple of (success, formatted_content, error_message)
         """
@@ -324,13 +335,93 @@ Respond with EXACTLY this JSON structure (no markdown, no code blocks):
                 # Try with latin-1 encoding as fallback
                 with open(path, 'r', encoding='latin-1') as f:
                     content = f.read()
-            
-            return True, content, ""
+
+            return True, self._format_file_window(content, focus_line), ""
             
         except Exception as e:
             error_msg = f"Error reading file {file_path}: {str(e)}"
             logger.error(error_msg)
             return False, "", error_msg
+
+    @staticmethod
+    def _format_file_window(content: str,
+                            focus_line: Optional[int] = None,
+                            context_lines: int = FILTER_FILE_CONTEXT_LINES,
+                            max_chars: int = FILTER_FILE_MAX_CHARS) -> str:
+        """Add line numbers and window content around a focus line.
+
+        Small files are returned whole (numbered). For larger files, a window
+        of ±context_lines around focus_line is used. The character budget is
+        applied by shrinking the window symmetrically around the focus line -
+        never by chopping off the tail - so the flagged line is always present
+        in what the filter model sees.
+        """
+        lines = content.split('\n')
+        total_lines = len(lines)
+
+        # A stale finding may reference a line beyond EOF - clamp it so the
+        # window still shows the end of the file instead of nothing.
+        if isinstance(focus_line, int) and focus_line > total_lines:
+            focus_line = total_lines
+
+        start = 0
+        end = total_lines
+        if total_lines > 2 * context_lines:
+            if isinstance(focus_line, int) and focus_line > 0:
+                start = max(0, focus_line - 1 - context_lines)
+                end = min(total_lines, focus_line - 1 + context_lines + 1)
+            else:
+                end = 2 * context_lines
+
+        def render(window_start: int, window_end: int) -> str:
+            numbered = []
+            if window_start > 0:
+                numbered.append(f"... ({window_start} earlier lines omitted)")
+            for idx in range(window_start, window_end):
+                numbered.append(f"{idx + 1:>6}\t{lines[idx]}")
+            if window_end < total_lines:
+                numbered.append(f"... ({total_lines - window_end} later lines omitted)")
+            return '\n'.join(numbered)
+
+        result = render(start, end)
+        if len(result) <= max_chars:
+            return result
+
+        # Over budget: grow a window outward from the focus line, one line at
+        # a time, so the focus line is guaranteed to fit within max_chars.
+        if isinstance(focus_line, int) and 0 < focus_line <= total_lines:
+            anchor = focus_line - 1
+        else:
+            anchor = start
+        anchor = min(max(anchor, start), end - 1)
+
+        def line_cost(idx: int) -> int:
+            return len(f"{idx + 1:>6}\t{lines[idx]}") + 1  # +1 for newline
+
+        budget = max(max_chars - 200, 200)  # headroom for the omission markers
+
+        if line_cost(anchor) > budget:
+            # Even the focus line alone exceeds the budget - include a
+            # truncated version of it rather than nothing.
+            focus_text = lines[anchor][:budget]
+            return f"{anchor + 1:>6}\t{focus_text}\n... (line truncated; surrounding content omitted)"
+
+        low = high = anchor
+        used = line_cost(anchor)
+        while True:
+            grew = False
+            if low - 1 >= start and used + line_cost(low - 1) <= budget:
+                low -= 1
+                used += line_cost(low)
+                grew = True
+            if high + 1 < end and used + line_cost(high + 1) <= budget:
+                high += 1
+                used += line_cost(high)
+                grew = True
+            if not grew:
+                break
+
+        return render(low, high + 1)
 
 
 def get_claude_api_client(model: str = DEFAULT_CLAUDE_MODEL,

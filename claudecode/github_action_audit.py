@@ -25,7 +25,8 @@ from claudecode.constants import (
     EXIT_GENERAL_ERROR,
     SUBPROCESS_TIMEOUT,
     DEFAULT_MAX_DIFF_CHARS,
-    CHARS_PER_LINE_ESTIMATE
+    CHARS_PER_LINE_ESTIMATE,
+    GITHUB_REQUEST_TIMEOUT
 )
 from claudecode.logger import get_logger
 from claudecode.review_schema import REVIEW_OUTPUT_SCHEMA
@@ -151,7 +152,7 @@ class GitHubActionClient:
         """
         # Get PR metadata first (contains total changed_files count)
         pr_url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}"
-        response = requests.get(pr_url, headers=self.headers)
+        response = requests.get(pr_url, headers=self.headers, timeout=GITHUB_REQUEST_TIMEOUT)
         response.raise_for_status()
         pr_metadata = response.json()
 
@@ -207,7 +208,8 @@ class GitHubActionClient:
             params = {'per_page': per_page, 'page': page}
 
             try:
-                response = requests.get(files_url, headers=self.headers, params=params)
+                response = requests.get(files_url, headers=self.headers, params=params,
+                                        timeout=GITHUB_REQUEST_TIMEOUT)
                 response.raise_for_status()
                 files_data = response.json()
 
@@ -244,12 +246,14 @@ class GitHubActionClient:
                     diff_section = self._format_file_diff(file_obj)
                     section_chars = len(diff_section)
 
-                    # Check if adding this would exceed limit
+                    # Skip files that don't fit, but keep packing smaller files
+                    # from this page so one oversized file (e.g. generated code)
+                    # doesn't evict everything after it.
                     if current_chars + section_chars > max_diff_chars:
                         is_truncated = True
-                        # Early termination - stop fetching more files
-                        logger.info(f"Diff truncated at {files_with_patches} files ({current_chars} chars, would exceed max {max_diff_chars})")
-                        break
+                        logger.info(f"Skipping {filename} from diff ({section_chars} chars would exceed "
+                                    f"max {max_diff_chars}, current {current_chars})")
+                        continue
 
                     # Add to diff
                     diff_sections.append(diff_section)
@@ -258,8 +262,12 @@ class GitHubActionClient:
                     included_files.append(filename)
                     logger.debug(f"Added {filename} to diff ({section_chars} chars, total: {current_chars}/{max_diff_chars})")
 
-                # If truncated, stop pagination
-                if is_truncated:
+                # Stop fetching further pages only once the remaining budget
+                # is too small for any meaningful diff section - files on
+                # later pages may still fit even after some were skipped.
+                MIN_USEFUL_SECTION_CHARS = 200
+                if is_truncated and (max_diff_chars - current_chars) < MIN_USEFUL_SECTION_CHARS:
+                    logger.info(f"Diff budget exhausted at {files_with_patches} files ({current_chars} chars)")
                     break
 
                 # GitHub API supports up to 3000 files
@@ -381,7 +389,8 @@ class GitHubActionClient:
             params = {'per_page': per_page, 'page': page}
 
             try:
-                response = requests.get(url, headers=self.headers, params=params)
+                response = requests.get(url, headers=self.headers, params=params,
+                                        timeout=GITHUB_REQUEST_TIMEOUT)
                 response.raise_for_status()
                 comments = response.json()
 
@@ -402,6 +411,40 @@ class GitHubActionClient:
 
         return all_comments
 
+    @staticmethod
+    def has_potential_user_reactions(comment: Dict[str, Any]) -> bool:
+        """Decide whether a comment could have human reactions worth fetching.
+
+        The comments API embeds a reactions summary. The bot seeds each of its
+        comments with one 👍 and one 👎, so a summary that is at most those two
+        seed thumbs cannot contain human reactions — skipping the per-comment
+        reactions API call (which is needed to tell bot and human reactions
+        apart) avoids an N+1 request pattern on PRs with many bot comments.
+
+        Args:
+            comment: Comment dictionary from GitHub API
+
+        Returns:
+            True if the detailed reactions should be fetched
+        """
+        summary = comment.get('reactions')
+        if not isinstance(summary, dict):
+            return True  # No summary available - fetch to be safe
+
+        total = summary.get('total_count')
+        if not isinstance(total, int):
+            return True
+
+        if total == 0:
+            return False
+
+        plus_one = summary.get('+1', 0)
+        minus_one = summary.get('-1', 0)
+        # Skip only when the summary is exactly the bot's two seed thumbs.
+        # A single thumb may be a human reaction on a comment whose seeding
+        # partially failed, so anything else is fetched to be safe.
+        return not (total == 2 and plus_one == 1 and minus_one == 1)
+
     def get_comment_reactions(self, repo_name: str, comment_id: int) -> Dict[str, int]:
         """Get reactions for a specific comment, excluding bot reactions.
 
@@ -415,7 +458,7 @@ class GitHubActionClient:
         url = f"https://api.github.com/repos/{repo_name}/pulls/comments/{comment_id}/reactions"
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=GITHUB_REQUEST_TIMEOUT)
             response.raise_for_status()
             reactions = response.json()
 
@@ -537,14 +580,47 @@ class SimpleClaudeRunner:
 
             # Construct Claude Code command
             # Use stdin for prompt to avoid "argument list too long" error
+            #
+            # Tool hardening: the review only needs local repo exploration.
+            # Bash is restricted to an allowlist of read-only git commands
+            # (everything else is denied in headless mode), so a
+            # prompt-injection attempt in a malicious PR cannot run arbitrary
+            # commands, exfiltrate data, or fetch attacker-controlled
+            # instructions. Network tools and ps are additionally denylisted
+            # as defense in depth.
+            allowed_tools = ','.join([
+                'Bash(git diff:*)',
+                'Bash(git log:*)',
+                'Bash(git show:*)',
+                'Bash(git status:*)',
+                'Bash(git blame:*)',
+            ])
+            disallowed_tools = ','.join([
+                'Bash(ps:*)',
+                'Bash(curl:*)',
+                'Bash(wget:*)',
+                'Bash(nc:*)',
+                'WebFetch',
+                'WebSearch',
+            ])
             cmd = [
                 'claude',
                 '--output-format', 'json',
                 '--model', DEFAULT_CLAUDE_MODEL,
-                '--disallowed-tools', 'Bash(ps:*)',
+                '--allowed-tools', allowed_tools,
+                '--disallowed-tools', disallowed_tools,
                 '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA)
             ]
-            
+
+            # Credential hygiene: the review subprocess doesn't need GitHub
+            # credentials (the repo is already checked out and diffs are
+            # local). Stripping them limits the blast radius of any
+            # prompt-injected tool use.
+            subprocess_env = {
+                k: v for k, v in os.environ.items()
+                if k not in ('GITHUB_TOKEN', 'GH_TOKEN')
+            }
+
             # Run Claude Code with retry logic
             NUM_RETRIES = 3
             for attempt in range(NUM_RETRIES):
@@ -554,7 +630,8 @@ class SimpleClaudeRunner:
                     cwd=repo_dir,
                     capture_output=True,
                     text=True,
-                    timeout=self.timeout_seconds
+                    timeout=self.timeout_seconds,
+                    env=subprocess_env
                 )
 
                 # Parse JSON output strictly. Claude CLI was invoked with --output-format json,
@@ -728,12 +805,24 @@ def initialize_clients() -> Tuple[GitHubActionClient, SimpleClaudeRunner]:
         github_client = GitHubActionClient()
     except Exception as e:
         raise ConfigurationError(f'Failed to initialize GitHub client: {str(e)}')
-    
+
+    # Honor the claudecode-timeout action input (exported as CLAUDE_TIMEOUT,
+    # in minutes); fall back to the built-in default when unset or invalid.
+    timeout_minutes = None
+    timeout_str = os.environ.get('CLAUDE_TIMEOUT', '')
+    if timeout_str:
+        try:
+            timeout_minutes = int(timeout_str)
+            if timeout_minutes <= 0:
+                timeout_minutes = None
+        except ValueError:
+            logger.warning(f"Invalid CLAUDE_TIMEOUT value: {timeout_str}, using default")
+
     try:
-        claude_runner = SimpleClaudeRunner()
+        claude_runner = SimpleClaudeRunner(timeout_minutes=timeout_minutes)
     except Exception as e:
         raise ConfigurationError(f'Failed to initialize Claude runner: {str(e)}')
-        
+
     return github_client, claude_runner
 
 
@@ -987,8 +1076,13 @@ def main():
                 bot_comment_threads = []
                 for comment in pr_comments:
                     if is_bot_comment(comment):
-                        # This is a bot comment (thread root)
-                        reactions = github_client.get_comment_reactions(repo_name, comment['id'])
+                        # This is a bot comment (thread root). Only hit the
+                        # reactions endpoint when the embedded summary suggests
+                        # there may be human reactions (avoids N+1 API calls).
+                        if github_client.has_potential_user_reactions(comment):
+                            reactions = github_client.get_comment_reactions(repo_name, comment['id'])
+                        else:
+                            reactions = {}
 
                         # Find replies to this comment
                         replies = [
@@ -1036,6 +1130,11 @@ def main():
                 custom_security_instructions=custom_security_instructions,
                 review_context=review_context,
                 diff_metadata=diff_metadata,
+                # Reflects the *actual* runtime state: False when disabled by
+                # config or when the filter disabled itself (e.g. API
+                # validation failure), so the prompt never promises a
+                # validation stage that won't run.
+                downstream_filter_enabled=findings_filter.use_claude_filtering,
             )
             return claude_runner.run_code_review(repo_dir, prompt_text), len(prompt_text)
 
@@ -1066,13 +1165,15 @@ def main():
 
             pr_summary_from_review = review_results.get('pr_summary', {})
             for finding in review_results.get('findings', []):
-                if isinstance(finding, dict):
-                    # Set review_type based on category
-                    category = finding.get('category', '').lower()
-                    if category == 'security':
-                        finding.setdefault('review_type', 'security')
-                    else:
-                        finding.setdefault('review_type', 'general')
+                if not isinstance(finding, dict):
+                    logger.warning(f"Skipping malformed (non-object) finding: {finding!r}")
+                    continue
+                # Set review_type based on category
+                category = finding.get('category', '').lower()
+                if category == 'security':
+                    finding.setdefault('review_type', 'security')
+                else:
+                    finding.setdefault('review_type', 'general')
                 all_findings.append(finding)
 
         except AuditError as e:
@@ -1149,10 +1250,9 @@ def main():
         
         # Output JSON to stdout
         print(json.dumps(output, indent=2))
-        
+
         # Exit with appropriate code
-        high_severity_count = len([f for f in kept_findings if f.get('severity', '').upper() == 'HIGH'])
-        sys.exit(EXIT_GENERAL_ERROR if high_severity_count > 0 else EXIT_SUCCESS)
+        sys.exit(EXIT_GENERAL_ERROR if high_count > 0 else EXIT_SUCCESS)
         
     except Exception as e:
         print(json.dumps({'error': f'Unexpected error: {str(e)}'}))

@@ -396,7 +396,7 @@ runs:
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: '18'
+        node-version: '22'
 
     - name: Setup git for diffing
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
@@ -457,7 +457,10 @@ runs:
         echo "::group::Install Deps"
         pip install -r "$ACTION_PATH/claudecode/requirements.txt"
         npm install -g @anthropic-ai/claude-code
-        sudo apt-get update && sudo apt-get install -y jq
+        # jq is pre-installed on GitHub-hosted runners - only install if missing
+        if ! command -v jq >/dev/null 2>&1; then
+          sudo apt-get update && sudo apt-get install -y jq
+        fi
         echo "::endgroup::"
 
     - name: Run ClaudeCode scan
@@ -507,7 +510,17 @@ runs:
                 
         # Set timeout
         export CLAUDE_TIMEOUT="$CLAUDECODE_TIMEOUT"
-        
+
+        # Remove credentials that actions/checkout persisted into git config.
+        # All git fetches happened in earlier steps and later steps use the
+        # GITHUB_TOKEN env var, so nothing after this point needs them - but
+        # the Claude review subprocess (which explores this checkout) must
+        # not be able to read the workflow token from .git/config.
+        for key in $(git config --local --list --name-only 2>/dev/null | grep -i 'extraheader$' || true); do
+          git config --local --unset-all "$key" || true
+          echo "Removed persisted git credential config: $key"
+        done
+
         # Run ClaudeCode audit with verbose debugging
         export REPO_PATH=$(pwd)
         cd "$ACTION_PATH"

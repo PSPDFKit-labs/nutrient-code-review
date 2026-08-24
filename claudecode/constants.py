@@ -9,9 +9,16 @@ DEFAULT_CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL') or 'claude-opus-5'
 DEFAULT_TIMEOUT_SECONDS = 180  # 3 minutes
 DEFAULT_MAX_RETRIES = 3
 RATE_LIMIT_BACKOFF_MAX = 30  # Maximum backoff time for rate limits
+GITHUB_REQUEST_TIMEOUT = 30  # Timeout for GitHub API HTTP requests
+# Concurrency for per-finding Claude API validation calls
+FILTER_MAX_WORKERS = 4
 
 # Token Limits
 PROMPT_TOKEN_LIMIT = 16384  # Output cap for filter/validator API calls
+
+# File-content windowing for per-finding filter prompts
+FILTER_FILE_CONTEXT_LINES = 150  # Lines of context around the finding line
+FILTER_FILE_MAX_CHARS = 40000  # Hard cap on file content embedded per finding
 
 # Diff Construction Limits
 DEFAULT_MAX_DIFF_CHARS = 800000  # 800k characters (~200k tokens; fits comfortably in 1M context models)
