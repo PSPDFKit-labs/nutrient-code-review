@@ -97,7 +97,7 @@ jobs:
 
 ## Runner Requirements
 
-This action's GitHub Action dependencies require a runner that supports the Node 24 action runtime (GitHub-hosted runners do). This is separate from the reviewer application's Node.js toolchain: the composite action continues to install Node.js 18 for the review and the repository test workflow continues to install Node.js 20 for its tests.
+This action's GitHub Action dependencies require a runner that supports the Node 24 action runtime: actions/runner 2.327.1 or newer (GitHub-hosted runners already qualify). This is separate from the reviewer application's Node.js toolchain: the composite action continues to install Node.js 18 for the review and the repository test workflow continues to install Node.js 20 for its tests.
 
 ## Security Considerations
 
@@ -529,6 +529,10 @@ python -m pip install -r claudecode/requirements.txt -r claudecode/requirements-
 
 # Python tests
 pytest claudecode -v
+
+# Action runtime guard (offline) and fixture refresh check (needs network)
+python scripts/check-action-runtime-dependencies.py
+python scripts/refresh-action-runtime-metadata.py --check
 
 # JavaScript tests
 cd scripts && npm test

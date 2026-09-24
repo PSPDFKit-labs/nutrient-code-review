@@ -7,10 +7,12 @@ import argparse
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+import yaml
 
-from action_runtime_dependencies import find_legacy_runtimes, load_metadata
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from action_runtime_dependencies import find_legacy_runtimes, load_metadata  # noqa: E402
 
 
 def main() -> int:
@@ -24,7 +26,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    errors = find_legacy_runtimes(args.action, load_metadata(args.metadata))
+    try:
+        errors = find_legacy_runtimes(args.action, load_metadata(args.metadata))
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if errors:
         print("Legacy GitHub Action runtime dependencies found:", file=sys.stderr)
         print(*errors, sep="\n", file=sys.stderr)
