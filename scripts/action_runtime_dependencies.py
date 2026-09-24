@@ -7,10 +7,11 @@ last refresh. ``scripts/refresh-action-runtime-metadata.py --check`` compares
 every record with the upstream manifest at that SHA.
 
 External composite actions are not traversed here. Their fixture record must list
-the resolved external ``dependencies`` so they can be validated recursively; a
+the ``dependencies`` from their steps so they can be validated recursively; a
 composite record without that list is rejected. The refresh script derives that
-list from the upstream ``runs.steps`` as well, mapping the composite's own local
-``./path`` steps to ``owner/repo/path@sha`` records.
+list from the upstream ``runs.steps``. A ``./path`` step inside an external
+composite is resolved by the runner against the caller's workspace, not the
+upstream repository, so such records are rejected rather than guessed at.
 
 Only references pinned to a full 40-character commit SHA are accepted; tags and
 branches are mutable and would let the recorded runtime drift silently.
@@ -35,7 +36,8 @@ def _action_file(action_directory: Path) -> Path:
     raise ValueError(f"No action.yml or action.yaml in local action {action_directory}")
 
 
-def _external_action(uses: str) -> str:
+def pinned_reference(uses: str) -> str:
+    """Return ``uses`` if it is pinned to a full 40-character lowercase commit SHA."""
     ref, _, sha = uses.partition("@")
     if not ref or len(sha) != 40 or any(character not in "0123456789abcdef" for character in sha):
         raise ValueError(f"Action reference is not pinned to a full commit SHA: {uses}")
@@ -62,9 +64,9 @@ def _action_references(action_file: Path) -> tuple[list[tuple[Path, str]], list[
         runtimes.append((candidate, runtime))
         if runtime != "composite":
             return
-        for step in runs.get("steps", []):
-            uses = step.get("uses")
-            if not uses:
+        for step in runs.get("steps") or []:
+            uses = step.get("uses") if isinstance(step, dict) else None
+            if not isinstance(uses, str) or not uses:
                 continue
             if uses.startswith("docker://"):
                 continue  # container steps have no JavaScript runtime
@@ -72,7 +74,7 @@ def _action_references(action_file: Path) -> tuple[list[tuple[Path, str]], list[
                 local_path = uses.split("@", 1)[0]
                 visit(_action_file(workspace_root / local_path))
             else:
-                external.append((candidate, _external_action(uses)))
+                external.append((candidate, pinned_reference(uses)))
 
     visit(action_file)
     return external, runtimes
@@ -114,7 +116,18 @@ def _external_errors(
         return [f"{source}: composite {uses} has no recorded dependencies; record its resolved external actions"]
     errors: list[str] = []
     for dependency in dependencies:
-        errors.extend(_external_errors(f"{source} -> {uses}", str(dependency), metadata, (*chain, uses)))
+        if str(dependency).startswith("./"):
+            errors.append(
+                f"{source} -> {uses}: local step {dependency} resolves against the caller workspace; "
+                "external composites with local steps are not supported"
+            )
+            continue
+        try:
+            pinned = pinned_reference(str(dependency))
+        except ValueError as exc:
+            errors.append(f"{source} -> {uses}: {exc}")
+            continue
+        errors.extend(_external_errors(f"{source} -> {uses}", pinned, metadata, (*chain, uses)))
     return errors
 
 

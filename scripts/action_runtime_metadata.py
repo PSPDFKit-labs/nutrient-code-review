@@ -9,6 +9,8 @@ from collections.abc import Callable
 
 import yaml
 
+from action_runtime_dependencies import pinned_reference
+
 RAW_BASE = "https://raw.githubusercontent.com"
 
 Fetcher = Callable[[str], "str | None"]
@@ -16,7 +18,7 @@ Fetcher = Callable[[str], "str | None"]
 
 def manifest_urls(uses: str) -> list[str]:
     """Candidate manifest URLs for an exact ``owner/repo[/path]@sha`` reference."""
-    ref, sha = uses.rsplit("@", 1)
+    ref, sha = pinned_reference(uses).rsplit("@", 1)
     owner, repo, *subpath = ref.split("/")
     base = "/".join([RAW_BASE, owner, repo, sha, *subpath])
     return [f"{base}/action.yml", f"{base}/action.yaml"]
@@ -54,24 +56,22 @@ def upstream_runtime(uses: str, fetch: Fetcher = fetch_text) -> str:
 def upstream_record(uses: str, fetch: Fetcher = fetch_text) -> dict[str, object]:
     """Return the derived fixture record for ``uses``.
 
-    Composite actions also get ``dependencies``: the external ``uses`` of their
-    steps, with the composite's own local ``./path`` steps mapped to
-    ``owner/repo/path@sha`` so they can be recorded and checked like any other
-    reference. ``docker://`` steps carry no JavaScript runtime and are omitted.
+    Composite actions also get ``dependencies``: the ``uses`` of their steps as
+    the upstream manifest spells them. ``docker://`` steps carry no JavaScript
+    runtime and are omitted. Local ``./path`` steps are kept verbatim because the
+    runner resolves them against the caller's workspace, not the upstream
+    repository; the checker rejects such records. Tag-pinned steps are kept too
+    and rejected by the checker as unpinned, which is intended.
     """
     runs = _upstream_runs(uses, fetch)
     record: dict[str, object] = {"runtime": str(runs["using"])}
     if record["runtime"] != "composite":
         return record
-    ref, sha = uses.rsplit("@", 1)
-    owner, repo, *_ = ref.split("/")
     dependencies: list[str] = []
     for step in runs.get("steps") or []:
         step_uses = step.get("uses") if isinstance(step, dict) else None
-        if not step_uses or step_uses.startswith("docker://"):
+        if not isinstance(step_uses, str) or not step_uses or step_uses.startswith("docker://"):
             continue
-        if step_uses.startswith("./"):
-            step_uses = f"{owner}/{repo}/{step_uses[2:].strip('/')}@{sha}"
         if step_uses not in dependencies:
             dependencies.append(step_uses)
     record["dependencies"] = dependencies

@@ -207,7 +207,11 @@ CURRENT_CHECKOUT = "actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd"
 
 
 def external_uses(steps):
-    return {step["uses"] for step in steps if "uses" in step and not step["uses"].startswith("./")}
+    return {
+        step["uses"]
+        for step in steps
+        if "uses" in step and not step["uses"].startswith(("./", "docker://"))
+    }
 
 
 def assert_recorded_node24(uses_set):
@@ -375,16 +379,14 @@ def test_refresh_derives_composite_dependencies_from_upstream_steps():
             "    - uses: ./setup\n"
             "    - uses: docker://alpine:3.20\n"
             f"    - uses: {CURRENT_CACHE}\n"
+            "    - uses: 42\n"
             "    - run: echo no uses\n      shell: bash\n"
         ),
     }
 
     record = upstream_record(composite, manifests.get)
 
-    assert record == {
-        "runtime": "composite",
-        "dependencies": [CURRENT_CACHE, "example/composite/setup@" + "c" * 40],
-    }
+    assert record == {"runtime": "composite", "dependencies": [CURRENT_CACHE, "./setup"]}
 
     differences, refreshed = compare({composite: {"runtime": "composite", "dependencies": [CURRENT_CACHE]}}, manifests.get)
     assert composite in differences
@@ -393,3 +395,64 @@ def test_refresh_derives_composite_dependencies_from_upstream_steps():
 
     differences, _ = compare({composite: record}, manifests.get)
     assert differences == {}
+
+
+def test_recorded_dependencies_must_be_full_sha_pins(tmp_path):
+    composite = "example/composite@" + "d" * 40
+    write_action(tmp_path / "action.yml", "composite", f"  steps:\n    - uses: {composite}\n")
+    metadata = {
+        **METADATA,
+        composite: {"runtime": "composite", "dependencies": ["actions/checkout@v5", CURRENT_CACHE]},
+    }
+
+    errors = find_legacy_runtimes(tmp_path / "action.yml", metadata)
+
+    assert len(errors) == 1
+    assert "not pinned to a full commit SHA" in errors[0]
+    assert "actions/checkout@v5" in errors[0]
+    assert composite in errors[0]
+
+
+def test_refresh_rejects_unpinned_fixture_keys():
+    try:
+        manifest_urls("actions/checkout@v5")
+    except ValueError as exc:
+        assert "not pinned to a full commit SHA" in str(exc)
+    else:
+        raise AssertionError("tag keys must be rejected")
+
+    try:
+        compare({"actions/checkout@v5": {"runtime": "node24"}}, lambda url: None)
+    except ValueError as exc:
+        assert "actions/checkout@v5" in str(exc)
+    else:
+        raise AssertionError("compare must reject tag keys before fetching")
+
+
+def test_checker_tolerates_malformed_steps(tmp_path):
+    write_action(tmp_path / "null-steps.yml", "composite", "  steps:\n")
+    write_action(
+        tmp_path / "odd-steps.yml",
+        "composite",
+        f"  steps:\n    - just a string\n    - uses: 42\n    - run: echo\n    - uses: {CURRENT_CACHE}\n",
+    )
+
+    assert find_legacy_runtimes(tmp_path / "null-steps.yml", METADATA) == []
+    assert collect_action_uses(tmp_path / "odd-steps.yml") == [(tmp_path / "odd-steps.yml", CURRENT_CACHE)]
+    assert run_checker(tmp_path / "odd-steps.yml").returncode == 0
+
+
+def test_external_composite_with_local_step_is_rejected_regardless_of_workspace_runtime(tmp_path):
+    # The runner resolves ./setup inside an external composite against the caller's
+    # workspace, so a Node 24 upstream ./setup says nothing about what actually runs.
+    composite = "example/composite@" + "e" * 40
+    write_action(tmp_path / "action.yml", "composite", f"  steps:\n    - uses: {composite}\n")
+    metadata = {**METADATA, composite: {"runtime": "composite", "dependencies": [CURRENT_CACHE, "./setup"]}}
+
+    for workspace_runtime in ("node20", "node24"):
+        write_action(tmp_path / "setup/action.yml", workspace_runtime)
+        errors = find_legacy_runtimes(tmp_path / "action.yml", metadata)
+        assert len(errors) == 1, errors
+        assert "./setup" in errors[0]
+        assert "caller workspace" in errors[0]
+        assert composite in errors[0]
