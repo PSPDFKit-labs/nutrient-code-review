@@ -239,7 +239,7 @@ runs:
     - name: Check ClaudeCode run history
       id: claudecode-history
       if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && steps.pr-info.outputs.is_pr == 'true')
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: .claudecode-marker
         key: claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
@@ -323,7 +323,7 @@ runs:
 
     - name: Checkout exact PR head
       if: inputs.checkout-pr == 'true' && steps.claudecode-check.outputs.enable_claudecode == 'true'
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       with:
         repository: ${{ github.repository }}
         ref: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
@@ -388,15 +388,16 @@ runs:
 
     - name: Set up Python
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
-      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: '3.x'
 
     - name: Set up Node.js
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
-      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
       with:
         node-version: '18'
+        package-manager-cache: false
 
     - name: Setup git for diffing
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
@@ -623,7 +624,7 @@ runs:
 
     - name: Save ClaudeCode reservation to cache
       if: steps.claudecode-check.outputs.enable_claudecode == 'true' && steps.claudecode-scan.outputs.scan_failed != 'true'
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
         path: .claudecode-marker
         key: claudecode-${{ github.repository_id }}-pr-${{ github.event.pull_request.number || steps.pr-info.outputs.pr_number }}-${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha || github.sha }}
@@ -631,7 +632,7 @@ runs:
 
     - name: Upload scan results
       if: always() && inputs.upload-results == 'true'
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
       with:
         name: code-review-results
         path: |

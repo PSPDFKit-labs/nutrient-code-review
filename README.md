@@ -95,6 +95,10 @@ jobs:
 
 **Note**: The `app-slug` parameter enables the bot to detect when it's mentioned in PR comments (e.g., `@my-code-review-app`). Requires `actions/create-github-app-token@v1.9.0` or later. `publish-check` additionally requires the GitHub App to have **Checks: read and write**. The action reacts to an accepted `review` command and creates the in-progress Check Run before checking out the repository.
 
+## Runner Requirements
+
+This action's GitHub Action dependencies require a runner that supports the Node 24 action runtime: actions/runner 2.327.1 or newer (GitHub-hosted runners already qualify). This is separate from the reviewer application's Node.js toolchain: the composite action continues to install Node.js 18 for the review and the repository test workflow continues to install Node.js 20 for its tests.
+
 ## Security Considerations
 
 This action is not hardened against prompt injection attacks and should only be used to review trusted PRs. We recommend [configuring your repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#controlling-changes-from-forks-to-workflows-in-public-repositories) to use the "Require approval for all external contributors" option to ensure workflows only run after a maintainer has reviewed the PR.
@@ -520,8 +524,15 @@ Review dismissal works automatically with custom apps since reviews are identifi
 Run the test suite to validate functionality:
 
 ```bash
+# From the repository root, install Python test dependencies
+python -m pip install -r claudecode/requirements.txt -r claudecode/requirements-dev.txt pytest
+
 # Python tests
 pytest claudecode -v
+
+# Action runtime guard (offline) and fixture refresh check (needs network)
+python scripts/check-action-runtime-dependencies.py
+python scripts/refresh-action-runtime-metadata.py --check
 
 # JavaScript tests
 cd scripts && npm test

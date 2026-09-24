@@ -41,8 +41,12 @@ claudecode/
 ## Testing
 
 ```bash
-# Python tests
-pytest claudecode -v  # Run all tests (177 passing)
+# Python tests (PyYAML is a dev-only dependency of the action-runtime guard tests)
+python -m pip install -r claudecode/requirements.txt -r claudecode/requirements-dev.txt pytest
+pytest claudecode -v  # Run all tests (250 tests)
+# Action runtime guard (offline) and fixture refresh check (needs network)
+python scripts/check-action-runtime-dependencies.py
+python scripts/refresh-action-runtime-metadata.py --check
 # JavaScript tests
 ~/.bun/bin/bun test scripts/comment-pr-findings.bun.test.js
 ```
