@@ -6,9 +6,14 @@ fixture is maintained evidence, not live data: it is only as trustworthy as its
 last refresh. ``scripts/refresh-action-runtime-metadata.py --check`` compares
 every record with the upstream manifest at that SHA.
 
-External composite actions are not traversed. Their fixture record must list the
-resolved external ``dependencies`` so they can be validated recursively; a
-composite record without that list is rejected.
+External composite actions are not traversed here. Their fixture record must list
+the resolved external ``dependencies`` so they can be validated recursively; a
+composite record without that list is rejected. The refresh script derives that
+list from the upstream ``runs.steps`` as well, mapping the composite's own local
+``./path`` steps to ``owner/repo/path@sha`` records.
+
+Only references pinned to a full 40-character commit SHA are accepted; tags and
+branches are mutable and would let the recorded runtime drift silently.
 """
 
 from __future__ import annotations
@@ -31,8 +36,9 @@ def _action_file(action_directory: Path) -> Path:
 
 
 def _external_action(uses: str) -> str:
-    if "@" not in uses:
-        raise ValueError(f"Action reference is not pinned: {uses}")
+    ref, _, sha = uses.partition("@")
+    if not ref or len(sha) != 40 or any(character not in "0123456789abcdef" for character in sha):
+        raise ValueError(f"Action reference is not pinned to a full commit SHA: {uses}")
     return uses
 
 

@@ -6,7 +6,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from action_runtime_dependencies import collect_action_uses, find_legacy_runtimes, load_metadata
-from action_runtime_metadata import compare, manifest_urls, render_fixture, upstream_runtime
+from action_runtime_metadata import compare, manifest_urls, render_fixture, upstream_record, upstream_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 METADATA = load_metadata(ROOT / "scripts/fixtures/action-runtime-metadata.json")
@@ -309,7 +309,7 @@ def test_refresh_compare_reports_differences_and_preserves_other_fields():
 
     differences, refreshed = compare(metadata, manifests.get)
 
-    assert differences == {LEGACY_CACHE: ("node24", "node20")}
+    assert differences == {LEGACY_CACHE: ({"runtime": "node24"}, {"runtime": "node20"})}
     assert refreshed[LEGACY_CACHE] == {"runtime": "node20", "dependencies": ["keep-me"]}
     assert refreshed[CURRENT_CACHE] == {"runtime": "node24"}
 
@@ -333,3 +333,63 @@ def test_refresh_reports_missing_or_malformed_manifests():
 def test_render_fixture_round_trips_checked_in_layout():
     fixture = ROOT / "scripts/fixtures/action-runtime-metadata.json"
     assert render_fixture(load_metadata(fixture)) == fixture.read_text()
+
+
+def test_every_workflow_job_uses_node24_actions():
+    workflow_files = sorted(ROOT.glob(".github/workflows/*.yml")) + sorted(ROOT.glob(".github/workflows/*.yaml"))
+    assert workflow_files, "no workflow files found under .github/workflows"
+    for workflow_file in workflow_files:
+        workflow = yaml.safe_load(workflow_file.read_text())
+        jobs = workflow.get("jobs") or {}
+        assert jobs, f"{workflow_file} has no jobs"
+        for job in jobs.values():
+            assert_recorded_node24(external_uses(job.get("steps") or []))
+
+
+def test_checker_rejects_mutable_action_references(tmp_path):
+    write_action(tmp_path / "action.yml", "composite", "  steps:\n    - uses: actions/checkout@v5\n")
+
+    try:
+        find_legacy_runtimes(tmp_path / "action.yml", METADATA)
+    except ValueError as exc:
+        assert "not pinned to a full commit SHA" in str(exc)
+        assert "actions/checkout@v5" in str(exc)
+    else:
+        raise AssertionError("tag pins must be rejected")
+
+    result = run_checker(tmp_path / "action.yml")
+    assert result.returncode == 2
+    assert "not pinned to a full commit SHA" in result.stderr
+
+    short_sha = tmp_path / "short.yml"
+    write_action(short_sha, "composite", "  steps:\n    - uses: actions/checkout@93cb6ef\n")
+    assert run_checker(short_sha).returncode == 2
+
+
+def test_refresh_derives_composite_dependencies_from_upstream_steps():
+    composite = "example/composite@" + "c" * 40
+    manifests = {
+        manifest_urls(composite)[0]: (
+            "runs:\n  using: composite\n  steps:\n"
+            f"    - uses: {CURRENT_CACHE}\n"
+            "    - uses: ./setup\n"
+            "    - uses: docker://alpine:3.20\n"
+            f"    - uses: {CURRENT_CACHE}\n"
+            "    - run: echo no uses\n      shell: bash\n"
+        ),
+    }
+
+    record = upstream_record(composite, manifests.get)
+
+    assert record == {
+        "runtime": "composite",
+        "dependencies": [CURRENT_CACHE, "example/composite/setup@" + "c" * 40],
+    }
+
+    differences, refreshed = compare({composite: {"runtime": "composite", "dependencies": [CURRENT_CACHE]}}, manifests.get)
+    assert composite in differences
+    assert differences[composite][1]["dependencies"] == record["dependencies"]
+    assert refreshed[composite] == record
+
+    differences, _ = compare({composite: record}, manifests.get)
+    assert differences == {}

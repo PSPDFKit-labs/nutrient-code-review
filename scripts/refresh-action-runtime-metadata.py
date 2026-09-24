@@ -3,8 +3,10 @@
 
 Each fixture key is an exact owner/repo[/path]@sha reference. This fetches the
 action manifest at that SHA from raw.githubusercontent.com and compares runs.using
-with the recorded runtime. --check exits 1 on any difference; --write rewrites the
-runtime fields and keeps other fields. Needs network access.
+with the recorded runtime; for composite actions it also derives the external
+dependencies from runs.steps and compares them with the recorded list. --check
+exits 1 on any difference; --write rewrites the derived fields and keeps other
+fields. Needs network access.
 """
 
 from __future__ import annotations
@@ -40,7 +42,9 @@ def main() -> int:
         return 2
 
     for uses, (recorded, upstream) in differences.items():
-        print(f"{uses}: recorded {recorded!r}, upstream {upstream!r}", file=sys.stderr)
+        for field in upstream:
+            if recorded.get(field) != upstream[field]:
+                print(f"{uses}: {field} recorded {recorded.get(field)!r}, upstream {upstream[field]!r}", file=sys.stderr)
     if args.write:
         args.fixture.write_text(render_fixture(refreshed))
         print(f"Updated {len(differences)} of {len(refreshed)} records in {args.fixture}.")
