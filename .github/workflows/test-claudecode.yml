@@ -18,17 +18,18 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
     
     - name: Set up Python
-      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: '3.10'
     
     - name: Set up Node.js
-      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
       with:
         node-version: '20'
+        package-manager-cache: false
     
     - name: Install Claude CLI
       run: |
@@ -38,6 +39,7 @@ jobs:
       run: |
         pip install pytest pytest-cov
         pip install -r claudecode/requirements.txt
+        pip install -r claudecode/requirements-dev.txt
     
     - name: Run ClaudeCode unit tests
       run: |

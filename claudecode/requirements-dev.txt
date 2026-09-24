@@ -1,0 +1,2 @@
+# Development and test dependencies for local validation tools
+PyYAML>=6.0.2
