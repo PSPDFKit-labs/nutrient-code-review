@@ -98,6 +98,24 @@ def find_legacy_runtimes(action_file: Path, metadata: dict[str, dict[str, object
     return errors
 
 
+def external_reference_errors(
+    uses: str, metadata: dict[str, dict[str, object]], source: str | None = None
+) -> list[str]:
+    """Return the checker's errors for one external ``uses`` reference.
+
+    This is the same classification ``find_legacy_runtimes`` applies to steps of
+    local composites, exposed so workflow-level checks share one policy: full-SHA
+    pin, recorded runtime of ``node24`` or ``docker``, or a composite with recorded
+    dependencies that pass recursively.
+    """
+    label = source or uses
+    try:
+        pinned = pinned_reference(uses)
+    except ValueError as exc:
+        return [f"{label}: {exc}"]
+    return _external_errors(label, pinned, metadata, ())
+
+
 def _external_errors(
     source: str, uses: str, metadata: dict[str, dict[str, object]], chain: tuple[str, ...]
 ) -> list[str]:

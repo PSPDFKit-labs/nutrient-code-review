@@ -10,7 +10,7 @@ __pycache__/
 # Output files
 *.csv
 *.json
-!scripts/fixtures/action-runtime-metadata.json
+!scripts/fixtures/*.json
 security_report.*
 
 # Virtual environments

@@ -5,7 +5,12 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from action_runtime_dependencies import collect_action_uses, find_legacy_runtimes, load_metadata
+from action_runtime_dependencies import (
+    collect_action_uses,
+    external_reference_errors,
+    find_legacy_runtimes,
+    load_metadata,
+)
 from action_runtime_metadata import compare, manifest_urls, render_fixture, upstream_record, upstream_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -214,12 +219,14 @@ def external_uses(steps):
     }
 
 
-def assert_recorded_node24(uses_set):
+def assert_node24_safe(uses_set, source):
+    """Apply the checker's own policy to workflow steps, so test and checker cannot diverge."""
     for uses in sorted(uses_set):
-        runtime = METADATA.get(uses, {}).get("runtime")
-        assert runtime == "node24", (
-            f"{uses} is recorded as {runtime!r}; add or refresh its record in "
-            "scripts/fixtures/action-runtime-metadata.json (see refresh-action-runtime-metadata.py)"
+        errors = external_reference_errors(uses, METADATA, source=str(source))
+        assert not errors, (
+            "; ".join(errors)
+            + " (record or refresh scripts/fixtures/action-runtime-metadata.json with "
+            "scripts/refresh-action-runtime-metadata.py --check / --write)"
         )
 
 
@@ -228,14 +235,14 @@ def test_repository_ci_uses_node24_actions_without_changing_application_nodes():
     test_steps = test_workflow["jobs"]["test-claudecode"]["steps"]
     test_uses = external_uses(test_steps)
     assert REQUIRED_TEST_CI_ACTIONS <= test_uses, f"missing pins: {REQUIRED_TEST_CI_ACTIONS - test_uses}"
-    assert_recorded_node24(test_uses)
+    assert_node24_safe(test_uses, "test-claudecode.yml")
     node_setup = next(step for step in test_steps if step.get("name") == "Set up Node.js")
     assert node_setup["with"] == {"node-version": "20", "package-manager-cache": False}
 
     review_workflow = yaml.safe_load((ROOT / ".github/workflows/code-review.yml").read_text())
     review_uses = external_uses(review_workflow["jobs"]["code-review"]["steps"])
     assert CURRENT_CHECKOUT in review_uses
-    assert_recorded_node24(review_uses)
+    assert_node24_safe(review_uses, "code-review.yml")
 
 
 def test_yaml_is_test_only_and_installed_by_test_ci():
@@ -346,8 +353,8 @@ def test_every_workflow_job_uses_node24_actions():
         workflow = yaml.safe_load(workflow_file.read_text())
         jobs = workflow.get("jobs") or {}
         assert jobs, f"{workflow_file} has no jobs"
-        for job in jobs.values():
-            assert_recorded_node24(external_uses(job.get("steps") or []))
+        for job_name, job in jobs.items():
+            assert_node24_safe(external_uses(job.get("steps") or []), f"{workflow_file.name}:{job_name}")
 
 
 def test_checker_rejects_mutable_action_references(tmp_path):
@@ -456,3 +463,29 @@ def test_external_composite_with_local_step_is_rejected_regardless_of_workspace_
         assert "./setup" in errors[0]
         assert "caller workspace" in errors[0]
         assert composite in errors[0]
+
+
+def test_workflow_policy_matches_checker_policy():
+    docker_action = "example/docker-lint@" + "f" * 40
+    composite = "example/composite@" + "a" * 40
+    metadata = {
+        **METADATA,
+        docker_action: {"runtime": "docker"},
+        composite: {"runtime": "composite", "dependencies": [CURRENT_CACHE]},
+    }
+
+    assert external_reference_errors(docker_action, metadata) == []
+    assert external_reference_errors(composite, metadata) == []
+    assert external_reference_errors(CURRENT_CACHE, metadata) == []
+
+    tag_errors = external_reference_errors("actions/checkout@v5", metadata, source="release.yml:build")
+    assert len(tag_errors) == 1
+    assert tag_errors[0].startswith("release.yml:build: ")
+    assert "not pinned to a full commit SHA" in tag_errors[0]
+
+    legacy_errors = external_reference_errors(LEGACY_CACHE, metadata)
+    assert len(legacy_errors) == 1
+    assert "node20" in legacy_errors[0]
+
+    unknown = "example/unknown@" + "b" * 40
+    assert external_reference_errors(unknown, metadata) == [f"{unknown}: no recorded runtime metadata for {unknown}"]
