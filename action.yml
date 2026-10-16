@@ -65,7 +65,7 @@ inputs:
     default: 'github-actions'
 
   comment-trigger-permission:
-    description: 'Minimum repository permission a commenter needs to start a review with a bot mention or the review command: admin, maintain, write, triage, read, or any (no check). Pull request events are not affected.'
+    description: 'Minimum repository permission a commenter needs to start a review with a bot mention or the review command: admin, maintain, write, triage, read, or any (no check). Custom organization roles count as their base permission. Pull request events are not affected.'
     required: false
     default: 'write'
 
@@ -290,8 +290,12 @@ runs:
         COMMENTER: ${{ github.event.comment.user.login }}
       run: |
         set -euo pipefail
-        # role_name distinguishes maintain/triage; permission is the legacy fallback.
-        if ! PERMISSION=$(gh api "repos/$REPOSITORY/collaborators/$COMMENTER/permission" --jq '.role_name // .permission' 2>/dev/null); then
+        # role_name distinguishes maintain/triage. Custom organization roles report
+        # their own name there, so fall back to the legacy permission field
+        # (admin/write/read/none), which reflects the role's base access.
+        ERROR_FILE=$(mktemp)
+        if ! PERMISSION=$(gh api "repos/$REPOSITORY/collaborators/$COMMENTER/permission" --jq '(.role_name // "") as $role | if ($role | test("^(admin|maintain|write|triage|read)$")) then $role else (.permission // "none") end' 2>"$ERROR_FILE"); then
+          echo "::warning::Could not look up repository permission for @$COMMENTER, treating as no access: $(head -c 300 "$ERROR_FILE" | tr '\n' ' ')"
           PERMISSION="none"
         fi
         PERMISSION="${PERMISSION:-none}"

@@ -22,8 +22,11 @@ jobs:
       # Comment-triggered runs have access to secrets, and this workflow runs the
       # action from the workspace (`uses: ./`). Only accept them on PRs whose
       # branch lives in this repository, from collaborators with write access.
-      # The action snapshots its scripts before checking out the PR, so the
-      # tooling itself always comes from the default branch here.
+      # For these runs the workspace starts at the default branch and the action
+      # snapshots its scripts before checking out the PR, so the tooling comes
+      # from the default branch. pull_request runs check out the PR head first
+      # and run its version of the action; that is intended (it tests the change)
+      # and relies on GitHub withholding secrets from fork pull_request runs.
       - name: Gate comment-triggered reviews
         id: gate
         if: github.event_name == 'issue_comment'
@@ -35,7 +38,9 @@ jobs:
         run: |
           set -euo pipefail
           HEAD_REPO=$(gh api "$PR_URL" --jq '.head.repo.full_name // ""')
-          if ! PERMISSION=$(gh api "repos/$REPOSITORY/collaborators/$COMMENTER/permission" --jq '.role_name // .permission' 2>/dev/null); then
+          ERROR_FILE=$(mktemp)
+          if ! PERMISSION=$(gh api "repos/$REPOSITORY/collaborators/$COMMENTER/permission" --jq '(.role_name // "") as $role | if ($role | test("^(admin|maintain|write|triage|read)$")) then $role else (.permission // "none") end' 2>"$ERROR_FILE"); then
+            echo "::warning::Could not look up repository permission for @$COMMENTER: $(head -c 300 "$ERROR_FILE" | tr '\n' ' ')"
             PERMISSION="none"
           fi
           if [ "$HEAD_REPO" != "$REPOSITORY" ]; then

@@ -101,7 +101,7 @@ This action's GitHub Action dependencies require a runner that supports the Node
 
 ## Security Considerations
 
-Comment-triggered reviews run with access to your secrets even on pull requests from forks, so by default only collaborators with write access can start them (`comment-trigger-permission`). The review never loads Claude Code settings, hooks, or MCP servers from the pull request's checkout, and the action runs its own scripts from a copy taken before the PR is checked out.
+Comment-triggered reviews run with access to your secrets even on pull requests from forks, so by default only collaborators with write access can start them (`comment-trigger-permission`). The review never loads Claude Code settings, hooks, or MCP servers from the pull request's checkout; `CLAUDE.md` files are read as plain text and passed to the review as project guidelines. When the action checks out the PR itself (comment triggers, or `checkout-pr: true`), it first copies its own scripts, so a PR cannot replace the tooling even if the action is used from the workspace (`uses: ./`). If your workflow checks out the PR head before a workspace-local `uses:`, that run uses the PR's version of the action.
 
 This action is not hardened against prompt injection attacks and should only be used to review trusted PRs. We recommend [configuring your repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#controlling-changes-from-forks-to-workflows-in-public-repositories) to use the "Require approval for all external contributors" option to ensure workflows only run after a maintainer has reviewed the PR.
 
@@ -135,7 +135,7 @@ This action is not hardened against prompt injection attacks and should only be 
 | `dismiss-stale-reviews` | Dismiss previous bot reviews when posting a new review (useful for follow-up commits) | `true` | No |
 | `skip-draft-prs` | Skip code review on draft pull requests. Does not apply to a review explicitly requested via a bot mention or the `review` comment command - those always run, even on drafts. | `true` | No |
 | `app-slug` | GitHub App slug for bot mention detection. If using `actions/create-github-app-token@v1.9.0+`, pass `${{ steps.app-token.outputs.app-slug }}`. Otherwise defaults to `github-actions`. | `github-actions` | No |
-| `comment-trigger-permission` | Minimum repository permission a commenter needs to start a review with a bot mention or the `review` command: `admin`, `maintain`, `write`, `triage`, `read`, or `any` (no check). Pull request events are not affected. | `write` | No |
+| `comment-trigger-permission` | Minimum repository permission a commenter needs to start a review with a bot mention or the `review` command: `admin`, `maintain`, `write`, `triage`, `read`, or `any` (no check). Custom organization roles count as their base permission. Requires the token to read repository metadata (always granted to `GITHUB_TOKEN`). Pull request events are not affected. | `write` | No |
 | `checkout-pr` | Let the action check out the exact PR head after trigger validation. This avoids checking out the default branch for `issue_comment` events. | `false` | No |
 | `publish-check` | Create and complete an advisory Check Run on the exact PR head. Requires `Checks: write`. | `false` | No |
 | `check-name` | Name shown for the Check Run. | `Nutrient Code Review` | No |

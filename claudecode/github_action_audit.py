@@ -869,6 +869,95 @@ def _is_finding_in_excluded_directory(finding: Dict[str, Any], github_client: Gi
     return github_client._is_excluded(file_path)
 
 
+def get_repo_dir() -> Path:
+    """Return the checkout being reviewed (REPO_PATH, falling back to cwd)."""
+    repo_path = os.environ.get('REPO_PATH')
+    return Path(repo_path) if repo_path else Path.cwd()
+
+
+def load_instructions_file(env_var: str, label: str) -> Optional[str]:
+    """Load an instructions file configured via an action input.
+
+    Relative paths are resolved against the reviewed checkout (as documented),
+    falling back to the current directory for backwards compatibility.
+    """
+    configured = os.environ.get(env_var, '')
+    if not configured:
+        return None
+
+    path = Path(configured)
+    if not path.is_absolute():
+        candidate = get_repo_dir() / path
+        path = candidate if candidate.exists() or not path.exists() else path
+
+    if not path.exists():
+        logger.warning(f"{label} file not found: {configured} (resolved to {path}); continuing without it")
+        return None
+
+    try:
+        content = path.read_text(encoding='utf-8')
+        logger.info(f"Loaded {label} from {path}")
+        return content
+    except Exception as e:
+        logger.warning(f"Failed to read {label} file {path}: {e}")
+        return None
+
+
+GUIDELINE_FILE_CHAR_LIMIT = 20000
+GUIDELINES_TOTAL_CHAR_LIMIT = 50000
+
+
+def load_repository_guidelines(repo_dir: Path, changed_files: List[str]) -> Optional[str]:
+    """Collect CLAUDE.md guidance from the checkout for the review prompt.
+
+    Claude Code runs with project settings disabled so the checkout cannot
+    configure hooks or MCP servers; that also stops it from loading CLAUDE.md,
+    so the files are read here instead: the root CLAUDE.md and .claude/CLAUDE.md,
+    plus CLAUDE.md in each directory containing a changed file. Only regular
+    files inside the checkout are read, so a symlink cannot pull in files from
+    elsewhere on the runner.
+    """
+    try:
+        root = repo_dir.resolve()
+    except OSError:
+        return None
+    candidates = [Path('CLAUDE.md'), Path('.claude') / 'CLAUDE.md']
+    directories = set()
+    for changed in changed_files:
+        for parent in Path(changed).parents:
+            if parent != Path('.'):
+                directories.add(parent)
+    for directory in sorted(directories, key=lambda d: (len(d.parts), str(d))):
+        candidates.append(directory / 'CLAUDE.md')
+
+    sections = []
+    total = 0
+    for relative in candidates:
+        path = root / relative
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            if not path.resolve().is_relative_to(root):
+                continue
+            content = path.read_text(encoding='utf-8', errors='replace').strip()
+        except (OSError, ValueError):
+            continue
+        if not content:
+            continue
+        if len(content) > GUIDELINE_FILE_CHAR_LIMIT:
+            content = content[:GUIDELINE_FILE_CHAR_LIMIT] + "\n... (truncated)"
+        if total + len(content) > GUIDELINES_TOTAL_CHAR_LIMIT:
+            logger.warning(f"Skipping {relative} and further guideline files: size limit reached")
+            break
+        total += len(content)
+        sections.append(f"--- {relative.as_posix()} ---\n{content}")
+
+    if not sections:
+        return None
+    logger.info(f"Loaded {len(sections)} repository guideline file(s) ({total} chars)")
+    return "\n\n".join(sections)
+
+
 def main():
     """Main execution function for GitHub Action."""
     try:
@@ -879,39 +968,14 @@ def main():
             print(json.dumps({'error': str(e)}))
             sys.exit(EXIT_CONFIGURATION_ERROR)
         
-        # Load custom filtering instructions if provided
-        custom_filtering_instructions = None
-        filtering_file = os.environ.get('FALSE_POSITIVE_FILTERING_INSTRUCTIONS', '')
-        if filtering_file and Path(filtering_file).exists():
-            try:
-                with open(filtering_file, 'r', encoding='utf-8') as f:
-                    custom_filtering_instructions = f.read()
-                    logger.info(f"Loaded custom filtering instructions from {filtering_file}")
-            except Exception as e:
-                logger.warning(f"Failed to read filtering instructions file {filtering_file}: {e}")
-        
-        # Load custom review instructions if provided
-        custom_review_instructions = None
-        review_file = os.environ.get('CUSTOM_REVIEW_INSTRUCTIONS', '')
-        if review_file and Path(review_file).exists():
-            try:
-                with open(review_file, 'r', encoding='utf-8') as f:
-                    custom_review_instructions = f.read()
-                    logger.info(f"Loaded custom review instructions from {review_file}")
-            except Exception as e:
-                logger.warning(f"Failed to read review instructions file {review_file}: {e}")
+        custom_filtering_instructions = load_instructions_file(
+            'FALSE_POSITIVE_FILTERING_INSTRUCTIONS', 'custom filtering instructions')
+        custom_review_instructions = load_instructions_file(
+            'CUSTOM_REVIEW_INSTRUCTIONS', 'custom review instructions')
+        # Appended to the security section of the prompt
+        custom_security_instructions = load_instructions_file(
+            'CUSTOM_SECURITY_SCAN_INSTRUCTIONS', 'custom security scan instructions')
 
-        # Load custom security scan instructions if provided (appended to security section)
-        custom_security_instructions = None
-        security_scan_file = os.environ.get('CUSTOM_SECURITY_SCAN_INSTRUCTIONS', '')
-        if security_scan_file and Path(security_scan_file).exists():
-            try:
-                with open(security_scan_file, 'r', encoding='utf-8') as f:
-                    custom_security_instructions = f.read()
-                    logger.info(f"Loaded custom security scan instructions from {security_scan_file}")
-            except Exception as e:
-                logger.warning(f"Failed to read security scan instructions file {security_scan_file}: {e}")
-        
         # Initialize components
         try:
             github_client, claude_runner = initialize_clients()
@@ -1028,9 +1092,9 @@ def main():
                 'stats': diff_stats
             }
 
-        # Get repo directory from environment or use current directory
-        repo_path = os.environ.get('REPO_PATH')
-        repo_dir = Path(repo_path) if repo_path else Path.cwd()
+        repo_dir = get_repo_dir()
+        repository_guidelines = load_repository_guidelines(
+            repo_dir, [f['filename'] for f in pr_data.get('files', [])])
 
         def run_review(include_diff: bool, diff_metadata=None):
             prompt_text = get_unified_review_prompt(
@@ -1041,6 +1105,7 @@ def main():
                 custom_security_instructions=custom_security_instructions,
                 review_context=review_context,
                 diff_metadata=diff_metadata,
+                repository_guidelines=repository_guidelines,
             )
             return claude_runner.run_code_review(repo_dir, prompt_text), len(prompt_text)
 
