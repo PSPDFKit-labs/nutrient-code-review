@@ -37,6 +37,7 @@ teardown_test() {
     unset TRIGGER_ON_OPEN TRIGGER_ON_COMMIT TRIGGER_ON_REVIEW_REQUEST TRIGGER_ON_MENTION
     unset TRIGGER_ON_REVIEW_COMMAND TRIGGER_ON_READY_FOR_REVIEW
     unset RUN_EVERY_COMMIT SKIP_DRAFT_PRS IS_DRAFT REQUIRE_LABEL PR_LABELS IS_PR
+    unset COMMENT_TRIGGER_PERMISSION COMMENTER COMMENTER_PERMISSION
 }
 
 # Helper to run the script and capture output
@@ -205,6 +206,7 @@ test_mention_trigger() {
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="mention"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_MENTION="true"
     export IS_PR="true"
 
@@ -308,6 +310,7 @@ EOF
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="slash_command"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_REVIEW_COMMAND="true"
     export IS_PR="true"
 
@@ -334,6 +337,7 @@ EOF
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="mention"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_MENTION="true"
     export IS_PR="true"
 
@@ -463,6 +467,7 @@ test_slash_command_trigger() {
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="slash_command"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_REVIEW_COMMAND="true"
     export IS_PR="true"
 
@@ -481,6 +486,7 @@ test_slash_command_trigger_disabled() {
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="slash_command"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_REVIEW_COMMAND="false"
     export IS_PR="true"
 
@@ -499,6 +505,7 @@ test_skip_draft_prs_mention_bypasses() {
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="mention"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_MENTION="true"
     export IS_PR="true"
     export SKIP_DRAFT_PRS="true"
@@ -519,6 +526,7 @@ test_skip_draft_prs_slash_command_bypasses() {
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="slash_command"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_REVIEW_COMMAND="true"
     export IS_PR="true"
     export SKIP_DRAFT_PRS="true"
@@ -558,6 +566,7 @@ test_issue_comment_not_on_pr() {
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="mention"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_MENTION="true"
     export IS_PR="false"
 
@@ -593,6 +602,7 @@ test_issue_comment_with_required_label_present() {
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="mention"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_MENTION="true"
     export IS_PR="true"
     export REQUIRE_LABEL="ready-for-review"
@@ -613,6 +623,7 @@ test_issue_comment_with_required_label_missing() {
     export PR_NUMBER="123"
     export GITHUB_SHA="abc123"
     export TRIGGER_TYPE="mention"
+    export COMMENTER_PERMISSION="write"
     export TRIGGER_ON_MENTION="true"
     export IS_PR="true"
     export REQUIRE_LABEL="ready-for-review"
@@ -622,6 +633,116 @@ test_issue_comment_with_required_label_missing() {
 
     assert_equals "false" "$ENABLE_CLAUDECODE" "Should disable for issue_comment when required label is missing"
 
+    teardown_test
+}
+
+
+# Helper for comment-permission tests: a review command on a PR
+setup_review_command() {
+    export GITHUB_EVENT_NAME="issue_comment"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="$1"
+    export IS_PR="true"
+    export COMMENTER="someone"
+}
+
+test_comment_trigger_denied_for_read_permission() {
+    echo "Test: Review command from a user with read permission is skipped"
+    setup_test
+    setup_review_command "slash_command"
+    export COMMENTER_PERMISSION="read"
+
+    run_script
+
+    assert_equals "false" "$ENABLE_CLAUDECODE" "Should disable review command from read-only user by default"
+    teardown_test
+}
+
+test_comment_trigger_denied_for_unknown_permission() {
+    echo "Test: Mention from a user whose permission could not be determined is skipped"
+    setup_test
+    setup_review_command "mention"
+
+    run_script
+
+    assert_equals "false" "$ENABLE_CLAUDECODE" "Should disable mention when commenter permission is unknown"
+    teardown_test
+}
+
+test_comment_trigger_allowed_for_higher_permissions() {
+    echo "Test: Maintain and admin satisfy the default write requirement"
+    local permission
+    for permission in maintain admin; do
+        setup_test
+        setup_review_command "slash_command"
+        export COMMENTER_PERMISSION="$permission"
+
+        run_script
+
+        assert_equals "true" "$ENABLE_CLAUDECODE" "Should enable review command from $permission user"
+        teardown_test
+    done
+}
+
+test_comment_trigger_custom_threshold() {
+    echo "Test: comment-trigger-permission threshold is configurable"
+    setup_test
+    setup_review_command "slash_command"
+    export COMMENT_TRIGGER_PERMISSION="triage"
+    export COMMENTER_PERMISSION="triage"
+    run_script
+    assert_equals "true" "$ENABLE_CLAUDECODE" "Should enable triage user when threshold is triage"
+    teardown_test
+
+    setup_test
+    setup_review_command "slash_command"
+    export COMMENT_TRIGGER_PERMISSION="admin"
+    export COMMENTER_PERMISSION="write"
+    run_script
+    assert_equals "false" "$ENABLE_CLAUDECODE" "Should disable write user when threshold is admin"
+    teardown_test
+}
+
+test_comment_trigger_any_skips_check() {
+    echo "Test: comment-trigger-permission 'any' allows every commenter"
+    setup_test
+    setup_review_command "mention"
+    export COMMENT_TRIGGER_PERMISSION="any"
+    export COMMENTER_PERMISSION="none"
+
+    run_script
+
+    assert_equals "true" "$ENABLE_CLAUDECODE" "Should enable mention from any user when threshold is any"
+    teardown_test
+}
+
+test_comment_trigger_invalid_threshold_fails_closed() {
+    echo "Test: Invalid comment-trigger-permission disables comment triggers"
+    setup_test
+    setup_review_command "slash_command"
+    export COMMENT_TRIGGER_PERMISSION="everyone"
+    export COMMENTER_PERMISSION="admin"
+
+    run_script
+
+    assert_equals "false" "$ENABLE_CLAUDECODE" "Should disable when threshold value is invalid"
+    teardown_test
+}
+
+test_pull_request_triggers_ignore_commenter_permission() {
+    echo "Test: Pull request triggers do not depend on commenter permission"
+    setup_test
+    export GITHUB_EVENT_NAME="pull_request"
+    export PR_NUMBER="123"
+    export GITHUB_SHA="abc123"
+    export TRIGGER_TYPE="open"
+    export COMMENT_TRIGGER_PERMISSION="admin"
+    export COMMENTER_PERMISSION="none"
+
+    run_script
+
+    assert_equals "true" "$ENABLE_CLAUDECODE" "Should enable open trigger regardless of comment permission settings"
     teardown_test
 }
 
@@ -659,6 +780,13 @@ test_issue_comment_not_on_pr
 test_default_values
 test_issue_comment_with_required_label_present
 test_issue_comment_with_required_label_missing
+test_comment_trigger_denied_for_read_permission
+test_comment_trigger_denied_for_unknown_permission
+test_comment_trigger_allowed_for_higher_permissions
+test_comment_trigger_custom_threshold
+test_comment_trigger_any_skips_check
+test_comment_trigger_invalid_threshold_fails_closed
+test_pull_request_triggers_ignore_commenter_permission
 
 echo ""
 echo "========================================"

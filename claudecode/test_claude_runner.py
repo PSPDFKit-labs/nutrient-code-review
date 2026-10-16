@@ -173,6 +173,9 @@ class TestSimpleClaudeRunner:
         assert '--disallowed-tools' in cmd
         assert 'Bash(ps:*)' in cmd
         assert '--json-schema' in cmd
+        # PR-supplied .claude settings and .mcp.json must not load
+        assert cmd[cmd.index('--setting-sources') + 1] == 'user'
+        assert '--strict-mcp-config' in cmd
         assert call_args[1]['input'] == 'test prompt'
         assert call_args[1]['cwd'] == Path('/tmp/test')
     

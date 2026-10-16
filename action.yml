@@ -64,6 +64,11 @@ inputs:
     required: false
     default: 'github-actions'
 
+  comment-trigger-permission:
+    description: 'Minimum repository permission a commenter needs to start a review with a bot mention or the review command: admin, maintain, write, triage, read, or any (no check). Custom organization roles count as their base permission. Pull request events are not affected.'
+    required: false
+    default: 'write'
+
   checkout-pr:
     description: 'Check out the exact PR head after trigger validation. Enable this to avoid a caller-side checkout that resolves issue_comment events to the default branch.'
     required: false
@@ -171,6 +176,23 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    # Copy the action's own scripts before anything checks out the pull request.
+    # When the action is used from the caller's workspace (`uses: ./` or a
+    # vendored copy), a PR checkout replaces those files with the PR's version;
+    # running from this snapshot keeps the tooling at the trusted revision.
+    - name: Snapshot action files
+      id: action-files
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        ACTION_DIR="$RUNNER_TEMP/nutrient-code-review-action"
+        rm -rf "$ACTION_DIR"
+        mkdir -p "$ACTION_DIR"
+        cp -R "$ACTION_PATH/claudecode" "$ACTION_PATH/scripts" "$ACTION_DIR/"
+        echo "dir=$ACTION_DIR" >> "$GITHUB_OUTPUT"
+
     - name: Install GitHub CLI
       shell: bash
       run: |
@@ -256,7 +278,29 @@ runs:
         APP_SLUG: ${{ inputs.app-slug }}
       run: |
         # See scripts/detect-trigger-type.sh for implementation details
-        "${{ github.action_path }}/scripts/detect-trigger-type.sh"
+        "${{ steps.action-files.outputs.dir }}/scripts/detect-trigger-type.sh"
+
+    - name: Check commenter permission
+      id: commenter
+      if: github.event_name == 'issue_comment' && inputs.comment-trigger-permission != 'any'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
+        REPOSITORY: ${{ github.repository }}
+        COMMENTER: ${{ github.event.comment.user.login }}
+      run: |
+        set -euo pipefail
+        # role_name distinguishes maintain/triage. Custom organization roles report
+        # their own name there, so fall back to the legacy permission field
+        # (admin/write/read/none), which reflects the role's base access.
+        ERROR_FILE=$(mktemp)
+        if ! PERMISSION=$(gh api "repos/$REPOSITORY/collaborators/$COMMENTER/permission" --jq '(.role_name // "") as $role | if ($role | test("^(admin|maintain|write|triage|read)$")) then $role else (.permission // "none") end' 2>"$ERROR_FILE"); then
+          echo "::warning::Could not look up repository permission for @$COMMENTER, treating as no access: $(head -c 300 "$ERROR_FILE" | tr '\n' ' ')"
+          PERMISSION="none"
+        fi
+        PERMISSION="${PERMISSION:-none}"
+        echo "Commenter @$COMMENTER has '$PERMISSION' permission on $REPOSITORY"
+        echo "permission=$PERMISSION" >> "$GITHUB_OUTPUT"
 
     - name: Determine ClaudeCode enablement
       id: claudecode-check
@@ -278,11 +322,14 @@ runs:
         PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) || steps.pr-info.outputs.pr_labels }}
         TRIGGER_TYPE: ${{ steps.trigger-detection.outputs.trigger_type }}
         IS_PR: ${{ steps.pr-info.outputs.is_pr }}
+        COMMENT_TRIGGER_PERMISSION: ${{ inputs.comment-trigger-permission }}
+        COMMENTER: ${{ github.event.comment.user.login }}
+        COMMENTER_PERMISSION: ${{ steps.commenter.outputs.permission }}
       run: |
         # Execute the enablement determination script
         # This script encapsulates the complex logic for deciding when to run code reviews
         # See scripts/determine-claudecode-enablement.sh for implementation details
-        "${{ github.action_path }}/scripts/determine-claudecode-enablement.sh"
+        "${{ steps.action-files.outputs.dir }}/scripts/determine-claudecode-enablement.sh"
 
     - name: Add eyes reaction for /review command
       if: github.event_name == 'issue_comment' && steps.trigger-detection.outputs.trigger_type == 'slash_command' && steps.claudecode-check.outputs.enable_claudecode == 'true'
@@ -304,7 +351,7 @@ runs:
       continue-on-error: true
       env:
         GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
-        CHECK_RUN_SCRIPT: ${{ github.action_path }}/scripts/check-run.js
+        CHECK_RUN_SCRIPT: ${{ steps.action-files.outputs.dir }}/scripts/check-run.js
         CHECK_RUN_OPERATION: start
         CHECK_NAME: ${{ inputs.check-name }}
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
@@ -453,7 +500,7 @@ runs:
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
       shell: bash
       env:
-        ACTION_PATH: ${{ github.action_path }}
+        ACTION_PATH: ${{ steps.action-files.outputs.dir }}
       run: |
         echo "::group::Install Deps"
         pip install -r "$ACTION_PATH/claudecode/requirements.txt"
@@ -480,7 +527,7 @@ runs:
         CLAUDECODE_TIMEOUT: ${{ inputs.claudecode-timeout }}
         MAX_DIFF_CHARS: ${{ inputs.max-diff-chars }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
-        ACTION_PATH: ${{ github.action_path }}
+        ACTION_PATH: ${{ steps.action-files.outputs.dir }}
       run: |
         echo "Running ClaudeCode AI code review analysis..."
         echo "----------------------------------------"
@@ -649,7 +696,7 @@ runs:
         GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
         CLAUDECODE_FINDINGS: ${{ steps.claudecode-scan.outputs.findings_count }}
         SILENCE_CLAUDECODE_COMMENTS: ${{ steps.claudecode-check.outputs.silence_claudecode_comments }}
-        ACTION_PATH: ${{ github.action_path }}
+        ACTION_PATH: ${{ steps.action-files.outputs.dir }}
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
         REVIEW_MODE: ${{ inputs.review-mode }}
       run: |
@@ -674,7 +721,7 @@ runs:
       continue-on-error: true
       env:
         GITHUB_TOKEN: ${{ env.GITHUB_TOKEN || github.token }}
-        CHECK_RUN_SCRIPT: ${{ github.action_path }}/scripts/check-run.js
+        CHECK_RUN_SCRIPT: ${{ steps.action-files.outputs.dir }}/scripts/check-run.js
         CHECK_RUN_OPERATION: complete
         CHECK_RUN_ID: ${{ steps.check-run-start.outputs.check_run_id }}
         CHECK_NAME: ${{ inputs.check-name }}
