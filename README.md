@@ -97,7 +97,7 @@ jobs:
 
 ## Runner Requirements
 
-This action's GitHub Action dependencies require a runner that supports the Node 24 action runtime: actions/runner 2.327.1 or newer (GitHub-hosted runners already qualify). This is separate from the reviewer application's Node.js toolchain: the composite action continues to install Node.js 18 for the review and the repository test workflow continues to install Node.js 20 for its tests.
+This action's GitHub Action dependencies require a runner that supports the Node 24 action runtime: actions/runner 2.327.1 or newer (GitHub-hosted runners already qualify). This is separate from the reviewer application's Node.js toolchain: the composite action installs Node.js 24 for the review (current Claude Code releases, required for Opus 5.5, need Node.js 22 or newer) and the repository test workflow continues to install Node.js 20 for its tests.
 
 ## Security Considerations
 
