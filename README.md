@@ -97,7 +97,7 @@ jobs:
 
 ## Runner Requirements
 
-This action's GitHub Action dependencies require a runner that supports the Node 24 action runtime: actions/runner 2.327.1 or newer (GitHub-hosted runners already qualify). This is separate from the reviewer application's Node.js toolchain: the composite action continues to install Node.js 18 for the review and the repository test workflow continues to install Node.js 20 for its tests.
+This action's GitHub Action dependencies require a runner that supports the Node 24 action runtime: actions/runner 2.327.1 or newer (GitHub-hosted runners already qualify). This is separate from the reviewer application's Node.js toolchain: the composite action installs Node.js 24 for the review (current Claude Code releases, required for Opus 5.5, need Node.js 22 or newer) and the repository test workflow continues to install Node.js 20 for its tests.
 
 ## Security Considerations
 
@@ -116,7 +116,7 @@ This action is not hardened against prompt injection attacks and should only be 
 | `review-mode` | How to post the review on the PR. `approve-reject` submits an `APPROVE` or `REQUEST_CHANGES` verdict based on findings; `comment-only` posts the same inline comments and summary as a non-blocking `COMMENT` review with no verdict. | `approve-reject` | No |
 | `upload-results` | Whether to upload results as artifacts | `true` | No |
 | `exclude-directories` | Comma-separated list of directories to exclude from scanning | None | No |
-| `claude-model` | Claude [model name](https://docs.anthropic.com/en/docs/about-claude/models/overview#model-names) to use. Defaults to Opus 5 (1M context). For very large PRs or to reduce cost, consider `claude-sonnet-4-6` (also 1M context, faster and cheaper). | `claude-opus-5` | No |
+| `claude-model` | Claude [model name](https://docs.anthropic.com/en/docs/about-claude/models/overview#model-names) to use. Defaults to Opus 5.5 (1M context). For very large PRs or to reduce cost, consider `claude-sonnet-5-5` (also 1M context, faster and cheaper). | `claude-opus-5-5` | No |
 | `claudecode-timeout` | Timeout for ClaudeCode analysis in minutes | `20` | No |
 | `max-diff-chars` | Maximum diff characters to include in prompt. Set to `0` for agentic mode (Claude uses git commands to explore). See [Diff Size Configuration](#diff-size-configuration) below. | `800000` | No |
 | `max-diff-lines` | **[DEPRECATED]** Use `max-diff-chars` instead. Converts lines to chars (line × 80). | None | No |
@@ -199,8 +199,8 @@ The action handles PRs of any size using three review modes:
 
 | Diff Size | Recommended Model | Context Window |
 |-----------|-------------------|----------------|
-| < 800k chars | `claude-opus-5` (default) | 1M tokens |
-| 800k - 1.6M chars | `claude-opus-5` or `claude-sonnet-4-6` with raised `max-diff-chars` | 1M tokens |
+| < 800k chars | `claude-opus-5-5` (default) | 1M tokens |
+| 800k - 1.6M chars | `claude-opus-5-5` or `claude-sonnet-5-5` with raised `max-diff-chars` | 1M tokens |
 | > 1.6M chars | Set `max-diff-chars: 0` (agentic mode) | Any model |
 
 **Backward Compatibility:**

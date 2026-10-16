@@ -29,7 +29,7 @@ inputs:
     default: ''
 
   claude-model:
-    description: 'Claude model to use for code review analysis (e.g., claude-sonnet-4-6)'
+    description: 'Claude model to use for code review analysis (e.g., claude-sonnet-5-5)'
     required: false
     default: ''
 
@@ -95,9 +95,9 @@ inputs:
       ~200k tokens). Larger diffs use agentic file reading instead. Set to 0 to
       always use agentic mode.
 
-      Note: 800k chars fits comfortably in the default Opus 5 model (1M
-      context). To embed even larger diffs, raise this value — both Opus 5
-      and Sonnet 4.6 have 1M context.
+      Note: 800k chars fits comfortably in the default Opus 5.5 model (1M
+      context). To embed even larger diffs, raise this value — both Opus 5.5
+      and Sonnet 5.5 have 1M context.
     required: false
     default: '800000'
 
@@ -443,7 +443,7 @@ runs:
       if: steps.claudecode-check.outputs.enable_claudecode == 'true'
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
       with:
-        node-version: '18'
+        node-version: '24'
         package-manager-cache: false
 
     - name: Setup git for diffing

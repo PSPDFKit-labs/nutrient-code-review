@@ -199,7 +199,7 @@ def test_root_action_preserves_cache_and_node_contracts():
     assert uses.count("actions/cache@caa296126883cff596d87d8935842f9db880ef25") == 1
     assert uses.count("actions/cache/save@caa296126883cff596d87d8935842f9db880ef25") == 1
     node_setup = next(step for step in steps if step.get("name") == "Set up Node.js")
-    assert node_setup["with"] == {"node-version": "18", "package-manager-cache": False}
+    assert node_setup["with"] == {"node-version": "24", "package-manager-cache": False}
 
 
 REQUIRED_TEST_CI_ACTIONS = {
