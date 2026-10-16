@@ -913,9 +913,10 @@ def load_repository_guidelines(repo_dir: Path, changed_files: List[str]) -> Opti
     Claude Code runs with project settings disabled so the checkout cannot
     configure hooks or MCP servers; that also stops it from loading CLAUDE.md,
     so the files are read here instead: the root CLAUDE.md and .claude/CLAUDE.md,
-    plus CLAUDE.md in each directory containing a changed file. Only regular
-    files inside the checkout are read, so a symlink cannot pull in files from
-    elsewhere on the runner.
+    plus CLAUDE.md in each directory containing a changed file. Symlinks are
+    followed only when they resolve to a file inside the checkout (e.g.
+    CLAUDE.md -> AGENTS.md), so they cannot pull in files from elsewhere on
+    the runner.
     """
     try:
         root = repo_dir.resolve()
@@ -928,16 +929,16 @@ def load_repository_guidelines(repo_dir: Path, changed_files: List[str]) -> Opti
             if parent != Path('.'):
                 directories.add(parent)
     for directory in sorted(directories, key=lambda d: (len(d.parts), str(d))):
-        candidates.append(directory / 'CLAUDE.md')
+        candidate = directory / 'CLAUDE.md'
+        if candidate not in candidates:
+            candidates.append(candidate)
 
     sections = []
     total = 0
     for relative in candidates:
         path = root / relative
         try:
-            if path.is_symlink() or not path.is_file():
-                continue
-            if not path.resolve().is_relative_to(root):
+            if not path.is_file() or not path.resolve().is_relative_to(root):
                 continue
             content = path.read_text(encoding='utf-8', errors='replace').strip()
         except (OSError, ValueError):

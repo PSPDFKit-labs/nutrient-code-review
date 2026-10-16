@@ -44,6 +44,22 @@ class TestLoadRepositoryGuidelines:
 
         assert load_repository_guidelines(repo, ['linked/secret.txt']) is None
 
+    def test_follows_symlinks_inside_the_checkout(self, tmp_path):
+        (tmp_path / 'AGENTS.md').write_text('shared agent rules')
+        os.symlink('AGENTS.md', tmp_path / 'CLAUDE.md')
+
+        result = load_repository_guidelines(tmp_path, ['a.py'])
+
+        assert '--- CLAUDE.md ---\nshared agent rules' in result
+
+    def test_includes_dotclaude_file_once_when_pr_touches_dotclaude(self, tmp_path):
+        (tmp_path / '.claude').mkdir()
+        (tmp_path / '.claude' / 'CLAUDE.md').write_text('dot claude rules')
+
+        result = load_repository_guidelines(tmp_path, ['.claude/settings.json'])
+
+        assert result.count('dot claude rules') == 1
+
     def test_truncates_large_files_and_caps_total(self, tmp_path):
         (tmp_path / 'CLAUDE.md').write_text('a' * 30000)
         for name in ('x', 'y', 'z'):
