@@ -19,12 +19,43 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      # Comment-triggered runs have access to secrets, and this workflow runs the
+      # action from the workspace (`uses: ./`). Only accept them on PRs whose
+      # branch lives in this repository, from collaborators with write access.
+      # The action snapshots its scripts before checking out the PR, so the
+      # tooling itself always comes from the default branch here.
+      - name: Gate comment-triggered reviews
+        id: gate
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_URL: ${{ github.event.issue.pull_request.url }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          HEAD_REPO=$(gh api "$PR_URL" --jq '.head.repo.full_name // ""')
+          if ! PERMISSION=$(gh api "repos/$REPOSITORY/collaborators/$COMMENTER/permission" --jq '.role_name // .permission' 2>/dev/null); then
+            PERMISSION="none"
+          fi
+          if [ "$HEAD_REPO" != "$REPOSITORY" ]; then
+            echo "Skipping: comment-triggered reviews only run for branches in $REPOSITORY (PR head: ${HEAD_REPO:-unknown})"
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+          elif [[ ! "$PERMISSION" =~ ^(admin|maintain|write)$ ]]; then
+            echo "Skipping: @$COMMENTER has '$PERMISSION' permission; write access is required"
+            echo "allowed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        if: github.event_name == 'pull_request' || steps.gate.outputs.allowed == 'true'
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
 
       - uses: ./
+        if: github.event_name == 'pull_request' || steps.gate.outputs.allowed == 'true'
         with:
           comment-pr: true
           upload-results: true

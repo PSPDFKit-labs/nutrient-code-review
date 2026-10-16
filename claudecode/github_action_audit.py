@@ -536,11 +536,16 @@ class SimpleClaudeRunner:
             last_parse_error = None
 
             # Construct Claude Code command
-            # Use stdin for prompt to avoid "argument list too long" error
+            # Use stdin for prompt to avoid "argument list too long" error.
+            # cwd is the PR checkout, so ignore its project/local settings (hooks,
+            # permissions, plugins) and .mcp.json servers: a PR must not be able
+            # to run commands in the review process.
             cmd = [
                 'claude',
                 '--output-format', 'json',
                 '--model', DEFAULT_CLAUDE_MODEL,
+                '--setting-sources', 'user',
+                '--strict-mcp-config',
                 '--disallowed-tools', 'Bash(ps:*)',
                 '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA)
             ]

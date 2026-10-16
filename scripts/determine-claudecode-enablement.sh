@@ -20,6 +20,10 @@
 #   - REQUIRE_LABEL: Required label name (optional)
 #   - PR_LABELS: JSON array of PR labels
 #   - IS_PR: Whether issue comment is on a PR (true/false, for issue_comment events)
+#   - COMMENT_TRIGGER_PERMISSION: Minimum commenter permission for mention/slash_command
+#     triggers (admin, maintain, write, triage, read, any; defaults to write)
+#   - COMMENTER: Login of the commenter (for log messages)
+#   - COMMENTER_PERMISSION: The commenter's repository permission (empty or none if unknown)
 #
 # Outputs to GITHUB_OUTPUT:
 #   - enable_claudecode: "true" or "false"
@@ -92,6 +96,38 @@ if [ "$ENABLE_CLAUDECODE" == "true" ]; then
     *)
       echo "Unknown trigger type: $TRIGGER_TYPE"
       ENABLE_CLAUDECODE="false"
+      ;;
+  esac
+fi
+
+# 1b. Comment-triggered reviews require a minimum repository permission, so users
+# without access cannot start reviews (and spend API credits) on any PR.
+permission_rank() {
+  case "$1" in
+    admin) echo 5 ;;
+    maintain) echo 4 ;;
+    write) echo 3 ;;
+    triage) echo 2 ;;
+    read) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
+
+if [ "$ENABLE_CLAUDECODE" == "true" ]; then
+  case "$TRIGGER_TYPE" in
+    mention|slash_command)
+      REQUIRED_PERMISSION="${COMMENT_TRIGGER_PERMISSION:-write}"
+      ACTUAL_PERMISSION="${COMMENTER_PERMISSION:-none}"
+      if [ "$REQUIRED_PERMISSION" != "any" ]; then
+        REQUIRED_RANK=$(permission_rank "$REQUIRED_PERMISSION")
+        if [ "$REQUIRED_RANK" -eq 0 ]; then
+          echo "::error::Invalid comment-trigger-permission '$REQUIRED_PERMISSION' (expected admin, maintain, write, triage, read, or any)"
+          ENABLE_CLAUDECODE="false"
+        elif [ "$(permission_rank "$ACTUAL_PERMISSION")" -lt "$REQUIRED_RANK" ]; then
+          echo "Commenter @${COMMENTER:-unknown} has '$ACTUAL_PERMISSION' permission; comment-triggered reviews require '$REQUIRED_PERMISSION' or higher, skipping"
+          ENABLE_CLAUDECODE="false"
+        fi
+      fi
       ;;
   esac
 fi
