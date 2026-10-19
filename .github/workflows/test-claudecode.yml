@@ -28,12 +28,9 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
       with:
-        node-version: '20'
+        # Current Claude Code releases require Node.js 22+
+        node-version: '24'
         package-manager-cache: false
-    
-    - name: Install Claude CLI
-      run: |
-        npm install -g @anthropic-ai/claude-code
     
     - name: Install dependencies
       run: |
@@ -41,6 +38,14 @@ jobs:
         pip install -r claudecode/requirements.txt
         pip install -r claudecode/requirements-dev.txt
     
+    - name: Install Claude CLI
+      run: |
+        # Install the version pinned in action.yml so the CLI permission canary
+        # (claudecode/test_cli_permission_canary.py) tests what reviews run
+        VERSION=$(python -c "import yaml; print(yaml.safe_load(open('action.yml'))['inputs']['claude-code-version']['default'])")
+        npm install -g "@anthropic-ai/claude-code@$VERSION"
+        claude --version
+
     - name: Run ClaudeCode unit tests
       run: |
         export PYTHONPATH="${PYTHONPATH}:${PWD}"
@@ -66,5 +71,6 @@ jobs:
 
     - name: Run bash script tests
       run: |
-        chmod +x scripts/test-determine-claudecode-enablement.sh
+        chmod +x scripts/test-determine-claudecode-enablement.sh scripts/test-git-credentials.sh
         ./scripts/test-determine-claudecode-enablement.sh
+        ./scripts/test-git-credentials.sh

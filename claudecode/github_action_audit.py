@@ -7,7 +7,10 @@ Runs Claude Code review on current working directory and outputs findings to std
 import os
 import sys
 import json
+import atexit
+import shutil
 import subprocess
+import tempfile
 import requests
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
@@ -25,7 +28,8 @@ from claudecode.constants import (
     EXIT_GENERAL_ERROR,
     SUBPROCESS_TIMEOUT,
     DEFAULT_MAX_DIFF_CHARS,
-    CHARS_PER_LINE_ESTIMATE
+    CHARS_PER_LINE_ESTIMATE,
+    GITHUB_REQUEST_TIMEOUT
 )
 from claudecode.logger import get_logger
 from claudecode.review_schema import REVIEW_OUTPUT_SCHEMA
@@ -151,7 +155,7 @@ class GitHubActionClient:
         """
         # Get PR metadata first (contains total changed_files count)
         pr_url = f"https://api.github.com/repos/{repo_name}/pulls/{pr_number}"
-        response = requests.get(pr_url, headers=self.headers)
+        response = requests.get(pr_url, headers=self.headers, timeout=GITHUB_REQUEST_TIMEOUT)
         response.raise_for_status()
         pr_metadata = response.json()
 
@@ -196,6 +200,7 @@ class GitHubActionClient:
         files_with_patches = 0
         is_truncated = False
         fetched_files = []
+        files_returned_by_api = 0  # includes excluded files, for the completeness check
         included_files = []  # Track which files made it into the diff
 
         # Fetch files page-by-page, building diff incrementally
@@ -207,7 +212,8 @@ class GitHubActionClient:
             params = {'per_page': per_page, 'page': page}
 
             try:
-                response = requests.get(files_url, headers=self.headers, params=params)
+                response = requests.get(files_url, headers=self.headers, params=params,
+                                        timeout=GITHUB_REQUEST_TIMEOUT)
                 response.raise_for_status()
                 files_data = response.json()
 
@@ -215,6 +221,7 @@ class GitHubActionClient:
                     break
 
                 # Process each file in this page
+                files_returned_by_api += len(files_data)
                 for file_data in files_data:
                     filename = file_data['filename']
 
@@ -244,12 +251,14 @@ class GitHubActionClient:
                     diff_section = self._format_file_diff(file_obj)
                     section_chars = len(diff_section)
 
-                    # Check if adding this would exceed limit
+                    # Skip files that don't fit, but keep packing smaller files
+                    # from this page so one oversized file (e.g. generated code)
+                    # doesn't evict everything after it.
                     if current_chars + section_chars > max_diff_chars:
                         is_truncated = True
-                        # Early termination - stop fetching more files
-                        logger.info(f"Diff truncated at {files_with_patches} files ({current_chars} chars, would exceed max {max_diff_chars})")
-                        break
+                        logger.info(f"Skipping {filename} from diff ({section_chars} chars would exceed "
+                                    f"max {max_diff_chars}, current {current_chars})")
+                        continue
 
                     # Add to diff
                     diff_sections.append(diff_section)
@@ -258,8 +267,12 @@ class GitHubActionClient:
                     included_files.append(filename)
                     logger.debug(f"Added {filename} to diff ({section_chars} chars, total: {current_chars}/{max_diff_chars})")
 
-                # If truncated, stop pagination
-                if is_truncated:
+                # Stop fetching further pages only once the remaining budget
+                # is too small for any meaningful diff section - files on
+                # later pages may still fit even after some were skipped.
+                MIN_USEFUL_SECTION_CHARS = 200
+                if is_truncated and (max_diff_chars - current_chars) < MIN_USEFUL_SECTION_CHARS:
+                    logger.info(f"Diff budget exhausted at {files_with_patches} files ({current_chars} chars)")
                     break
 
                 # GitHub API supports up to 3000 files
@@ -275,6 +288,14 @@ class GitHubActionClient:
                 break
 
         logger.info(f"Fetched {len(fetched_files)} files for PR #{pr_number} (total in PR: {total_files_in_pr})")
+
+        # Files that were never fetched (a failed page, or GitHub's file-list
+        # cap) are missing from the diff even if the budget wasn't exhausted,
+        # so the prompt must not claim the diff is complete.
+        if files_returned_by_api < total_files_in_pr and not is_truncated:
+            is_truncated = True
+            logger.warning(f"Only {files_returned_by_api} of {total_files_in_pr} files could be fetched; "
+                           "treating the diff as partial")
 
         pr_diff = '\n'.join(diff_sections)
         diff_char_count = len(pr_diff)
@@ -381,7 +402,8 @@ class GitHubActionClient:
             params = {'per_page': per_page, 'page': page}
 
             try:
-                response = requests.get(url, headers=self.headers, params=params)
+                response = requests.get(url, headers=self.headers, params=params,
+                                        timeout=GITHUB_REQUEST_TIMEOUT)
                 response.raise_for_status()
                 comments = response.json()
 
@@ -415,7 +437,7 @@ class GitHubActionClient:
         url = f"https://api.github.com/repos/{repo_name}/pulls/comments/{comment_id}/reactions"
 
         try:
-            response = requests.get(url, headers=self.headers)
+            response = requests.get(url, headers=self.headers, timeout=GITHUB_REQUEST_TIMEOUT)
             response.raise_for_status()
             reactions = response.json()
 
@@ -500,6 +522,55 @@ class GitHubActionClient:
         return ''.join(filtered_sections)
 
 
+# Environment variables passed to the Claude Code review subprocess. Everything
+# else - GitHub tokens, ACTIONS_* runtime/OIDC tokens, GITHUB_ENV/GITHUB_OUTPUT
+# file paths, job-level secrets - is withheld: the review reads untrusted PR
+# content, so it only gets what the CLI needs to reach the API.
+CLAUDE_ENV_ALLOWLIST = (
+    'PATH', 'USER', 'LOGNAME', 'SHELL', 'TERM', 'TZ', 'TMPDIR',
+    'LANG', 'LC_ALL', 'LC_CTYPE',
+    'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL',
+    # Needed to reach the API from proxied or custom-CA (self-hosted) runners
+    'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+    'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+)
+
+# Values that must never appear in output (results JSON, logs, PR comments)
+SECRET_ENV_VARS = (
+    'ANTHROPIC_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN',
+    'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_RUNTIME_TOKEN',
+)
+
+
+def build_review_env(repo_dir: Path) -> Dict[str, str]:
+    """Build the environment for the Claude Code review subprocess.
+
+    Uses an allowlist plus a fresh HOME, so the reviewer sees neither job
+    secrets nor the runner user's real home (git credentials, Claude settings
+    and hooks on self-hosted runners). The fresh HOME's git config only marks
+    the checkout as a safe directory so read-only git commands keep working
+    when the workspace is owned by another user (container jobs).
+    """
+    env = {k: v for k, v in os.environ.items() if k in CLAUDE_ENV_ALLOWLIST}
+    home = tempfile.mkdtemp(prefix='claude-review-home-', dir=os.environ.get('RUNNER_TEMP') or None)
+    atexit.register(shutil.rmtree, home, True)
+    Path(home, '.gitconfig').write_text(f"[safe]\n\tdirectory = {Path(repo_dir).resolve()}\n")
+    env['HOME'] = home
+    # Keep the pinned CLI version for the whole run and skip telemetry traffic
+    env['DISABLE_AUTOUPDATER'] = '1'
+    env['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] = '1'
+    return env
+
+
+def redact_secrets(text: str) -> str:
+    """Replace known secret values in text before it is printed or published."""
+    for name in SECRET_ENV_VARS:
+        value = os.environ.get(name, '')
+        if len(value) >= 8:
+            text = text.replace(value, f'[REDACTED {name}]')
+    return text
+
+
 class SimpleClaudeRunner:
     """Simplified Claude Code runner for GitHub Actions."""
     
@@ -540,16 +611,56 @@ class SimpleClaudeRunner:
             # cwd is the PR checkout, so ignore its project/local settings (hooks,
             # permissions, plugins) and .mcp.json servers: a PR must not be able
             # to run commands in the review process.
+            #
+            # Tool hardening. The permission mode is pinned to dontAsk: anything
+            # not covered by Claude Code's built-in read-only rules is denied
+            # outright, deterministically. (Without it, newer CLIs may default to
+            # auto mode, where a server-side classifier decides and reads outside
+            # the checkout are allowed.) The built-in rules allow plain git
+            # diff/log/show/blame/status and reads inside the checkout, and deny
+            # risky variants such as `git log --output=<file>`,
+            # `git blame --contents=<file>`, `--ext-diff` and `env`. No Bash
+            # allow rules are passed on purpose: a `Bash(git log:*)` prefix rule
+            # would approve those variants too. Reads outside the working
+            # directory are additionally blocked by setting, and tools a review
+            # never needs (network, file edits, worktrees, scheduling,
+            # workflows) are denied.
+            disallowed_tools = ','.join([
+                'Bash(ps:*)',
+                'Bash(curl:*)',
+                'Bash(wget:*)',
+                'Bash(nc:*)',
+                'WebFetch',
+                'WebSearch',
+                'Write',
+                'Edit',
+                'NotebookEdit',
+                'EnterWorktree',
+                'ExitWorktree',
+                'CronCreate',
+                'CronDelete',
+                'ScheduleWakeup',
+                'Workflow',
+                'RemoteTrigger',
+            ])
+            permission_settings = json.dumps({
+                'permissions': {'blockReadsOutsideWorkingDirectories': True}
+            })
             cmd = [
                 'claude',
                 '--output-format', 'json',
                 '--model', DEFAULT_CLAUDE_MODEL,
                 '--setting-sources', 'user',
                 '--strict-mcp-config',
-                '--disallowed-tools', 'Bash(ps:*)',
+                '--permission-mode', 'dontAsk',
+                '--settings', permission_settings,
+                '--disallowed-tools', disallowed_tools,
                 '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA)
             ]
-            
+
+            # Credential hygiene: only allowlisted variables and a fresh HOME
+            subprocess_env = build_review_env(repo_dir)
+
             # Run Claude Code with retry logic
             NUM_RETRIES = 3
             for attempt in range(NUM_RETRIES):
@@ -559,7 +670,8 @@ class SimpleClaudeRunner:
                     cwd=repo_dir,
                     capture_output=True,
                     text=True,
-                    timeout=self.timeout_seconds
+                    timeout=self.timeout_seconds,
+                    env=subprocess_env
                 )
 
                 # Parse JSON output strictly. Claude CLI was invoked with --output-format json,
@@ -575,7 +687,7 @@ class SimpleClaudeRunner:
                         f"Failed to parse Claude stdout as JSON ({parse_error}). "
                         f"Raw output (first 2000 chars): {result.stdout[:2000]!r}"
                     )
-                    print(f"[Error] {last_parse_error}", file=sys.stderr)
+                    print(redact_secrets(f"[Error] {last_parse_error}"), file=sys.stderr)
 
                 if success:
                     # Check for "Prompt is too long" error that should trigger fallback to agentic mode
@@ -733,12 +845,24 @@ def initialize_clients() -> Tuple[GitHubActionClient, SimpleClaudeRunner]:
         github_client = GitHubActionClient()
     except Exception as e:
         raise ConfigurationError(f'Failed to initialize GitHub client: {str(e)}')
-    
+
+    # Honor the claudecode-timeout action input (exported as CLAUDE_TIMEOUT,
+    # in minutes); fall back to the built-in default when unset or invalid.
+    timeout_minutes = None
+    timeout_str = os.environ.get('CLAUDE_TIMEOUT', '')
+    if timeout_str:
+        try:
+            timeout_minutes = int(timeout_str)
+            if timeout_minutes <= 0:
+                timeout_minutes = None
+        except ValueError:
+            logger.warning(f"Invalid CLAUDE_TIMEOUT value: {timeout_str}, using default")
+
     try:
-        claude_runner = SimpleClaudeRunner()
+        claude_runner = SimpleClaudeRunner(timeout_minutes=timeout_minutes)
     except Exception as e:
         raise ConfigurationError(f'Failed to initialize Claude runner: {str(e)}')
-        
+
     return github_client, claude_runner
 
 
@@ -1107,6 +1231,11 @@ def main():
                 review_context=review_context,
                 diff_metadata=diff_metadata,
                 repository_guidelines=repository_guidelines,
+                # Reflects the *actual* runtime state: False when disabled by
+                # config or when the filter disabled itself (e.g. API
+                # validation failure), so the prompt never promises a
+                # validation stage that won't run.
+                downstream_filter_enabled=findings_filter.use_claude_filtering,
             )
             return claude_runner.run_code_review(repo_dir, prompt_text), len(prompt_text)
 
@@ -1137,17 +1266,19 @@ def main():
 
             pr_summary_from_review = review_results.get('pr_summary', {})
             for finding in review_results.get('findings', []):
-                if isinstance(finding, dict):
-                    # Set review_type based on category
-                    category = finding.get('category', '').lower()
-                    if category == 'security':
-                        finding.setdefault('review_type', 'security')
-                    else:
-                        finding.setdefault('review_type', 'general')
+                if not isinstance(finding, dict):
+                    logger.warning(f"Skipping malformed (non-object) finding: {finding!r}")
+                    continue
+                # Set review_type based on category
+                category = finding.get('category', '').lower()
+                if category == 'security':
+                    finding.setdefault('review_type', 'security')
+                else:
+                    finding.setdefault('review_type', 'general')
                 all_findings.append(finding)
 
         except AuditError as e:
-            print(json.dumps({'error': f'Code review failed: {str(e)}'}))
+            print(redact_secrets(json.dumps({'error': f'Code review failed: {str(e)}'})))
             sys.exit(EXIT_GENERAL_ERROR)
 
         # Filter findings to reduce false positives
@@ -1219,14 +1350,13 @@ def main():
         }
         
         # Output JSON to stdout
-        print(json.dumps(output, indent=2))
-        
+        print(redact_secrets(json.dumps(output, indent=2)))
+
         # Exit with appropriate code
-        high_severity_count = len([f for f in kept_findings if f.get('severity', '').upper() == 'HIGH'])
-        sys.exit(EXIT_GENERAL_ERROR if high_severity_count > 0 else EXIT_SUCCESS)
+        sys.exit(EXIT_GENERAL_ERROR if high_count > 0 else EXIT_SUCCESS)
         
     except Exception as e:
-        print(json.dumps({'error': f'Unexpected error: {str(e)}'}))
+        print(redact_secrets(json.dumps({'error': f'Unexpected error: {str(e)}'})))
         sys.exit(EXIT_CONFIGURATION_ERROR)
 
 

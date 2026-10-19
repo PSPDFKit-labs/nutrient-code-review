@@ -33,6 +33,11 @@ inputs:
     required: false
     default: ''
 
+  claude-code-version:
+    description: 'Claude Code CLI version to install (an exact npm version such as 2.1.301). The CLI decides which commands the review may run, so it is pinned to a tested release by default.'
+    required: false
+    default: '2.1.301'
+
   run-every-commit:
     description: 'DEPRECATED: Use trigger-on-commit instead. Run ClaudeCode on every commit (skips cache check). Warning: This may lead to more false positives on PRs with many commits as the AI analyzes the same code multiple times.'
     required: false
@@ -188,9 +193,16 @@ runs:
       run: |
         set -euo pipefail
         ACTION_DIR="$RUNNER_TEMP/nutrient-code-review-action"
-        rm -rf "$ACTION_DIR"
+        if [ -d "$ACTION_DIR" ]; then
+          chmod -R u+w "$ACTION_DIR"
+          rm -rf "$ACTION_DIR"
+        fi
         mkdir -p "$ACTION_DIR"
         cp -R "$ACTION_PATH/claudecode" "$ACTION_PATH/scripts" "$ACTION_DIR/"
+        # Later steps execute these scripts with GITHUB_TOKEN; nothing needs to
+        # write to them. (claudecode/ stays writable: the scan writes its
+        # results there.)
+        chmod -R a-w "$ACTION_DIR/scripts"
         echo "dir=$ACTION_DIR" >> "$GITHUB_OUTPUT"
 
     - name: Install GitHub CLI
@@ -501,11 +513,19 @@ runs:
       shell: bash
       env:
         ACTION_PATH: ${{ steps.action-files.outputs.dir }}
+        CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
       run: |
         echo "::group::Install Deps"
+        if [[ ! "$CLAUDE_CODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+          echo "::error::claude-code-version must be an exact version such as 2.1.301 (got '$CLAUDE_CODE_VERSION')"
+          exit 1
+        fi
         pip install -r "$ACTION_PATH/claudecode/requirements.txt"
-        npm install -g @anthropic-ai/claude-code
-        sudo apt-get update && sudo apt-get install -y jq
+        npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+        # jq is pre-installed on GitHub-hosted runners - only install if missing
+        if ! command -v jq >/dev/null 2>&1; then
+          sudo apt-get update && sudo apt-get install -y jq
+        fi
         echo "::endgroup::"
 
     - name: Run ClaudeCode scan
@@ -555,7 +575,16 @@ runs:
                 
         # Set timeout
         export CLAUDE_TIMEOUT="$CLAUDECODE_TIMEOUT"
-        
+
+        # Hide credentials that actions/checkout persisted into the checkout's
+        # git config while the review runs: the reviewer can read files in the
+        # checkout, including .git/config. They are restored when this step
+        # exits so later steps in the caller's job (e.g. git push) still work.
+        CREDENTIALS_STATE="$RUNNER_TEMP/nutrient-code-review-git-credentials"
+        REVIEW_REPO_PATH=$(pwd)
+        trap '(cd "$REVIEW_REPO_PATH" && "$ACTION_PATH/scripts/git-credentials.sh" restore "$CREDENTIALS_STATE")' EXIT
+        "$ACTION_PATH/scripts/git-credentials.sh" hide "$CREDENTIALS_STATE"
+
         # Run ClaudeCode audit with verbose debugging
         export REPO_PATH=$(pwd)
         cd "$ACTION_PATH"

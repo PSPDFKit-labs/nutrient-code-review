@@ -237,7 +237,7 @@ def test_repository_ci_uses_node24_actions_without_changing_application_nodes():
     assert REQUIRED_TEST_CI_ACTIONS <= test_uses, f"missing pins: {REQUIRED_TEST_CI_ACTIONS - test_uses}"
     assert_node24_safe(test_uses, "test-claudecode.yml")
     node_setup = next(step for step in test_steps if step.get("name") == "Set up Node.js")
-    assert node_setup["with"] == {"node-version": "20", "package-manager-cache": False}
+    assert node_setup["with"] == {"node-version": "24", "package-manager-cache": False}
 
     review_workflow = yaml.safe_load((ROOT / ".github/workflows/code-review.yml").read_text())
     review_uses = external_uses(review_workflow["jobs"]["code-review"]["steps"])

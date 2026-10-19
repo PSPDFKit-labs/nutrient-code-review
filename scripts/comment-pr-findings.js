@@ -10,6 +10,19 @@ const { spawnSync } = require('child_process');
 // PR Summary marker for identifying our summary sections
 const PR_SUMMARY_MARKER = '📋 **PR Summary:**';
 
+// Per-call timeout for gh api requests
+const GH_API_TIMEOUT_MS = 30000;
+// Creating a review with many inline comments can legitimately take longer
+const REVIEW_POST_TIMEOUT_MS = 120000;
+
+// Existing threads within this many lines of a finding count as the same finding
+// (lines drift slightly between commits)
+const DUPLICATE_LINE_TOLERANCE = 3;
+
+// Marker prefix for inline finding comments (kept in sync with
+// claudecode/format_pr_comments.py BOT_COMMENT_MARKER)
+const BOT_COMMENT_MARKER = '🤖 **Code Review Finding: ';
+
 // Review mode: 'approve-reject' (APPROVE / REQUEST_CHANGES verdict) or 'comment-only' (COMMENT, no verdict)
 const REVIEW_MODE = (process.env.REVIEW_MODE || 'approve-reject').toLowerCase();
 const COMMENT_ONLY_MODE = REVIEW_MODE === 'comment-only';
@@ -37,7 +50,7 @@ const context = {
 };
 
 // GitHub API helper using gh CLI
-function ghApi(endpoint, method = 'GET', data = null) {
+function ghApi(endpoint, method = 'GET', data = null, timeoutMs = GH_API_TIMEOUT_MS) {
   // Build arguments array safely to prevent command injection
   const args = ['api', endpoint, '--method', method];
   
@@ -49,11 +62,16 @@ function ghApi(endpoint, method = 'GET', data = null) {
     const result = spawnSync('gh', args, {
       encoding: 'utf8',
       input: data ? JSON.stringify(data) : undefined,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // A hung API call must not block the job until its own timeout
+      timeout: timeoutMs
     });
     
     if (result.error) {
-      throw new Error(`Failed to spawn gh process: ${result.error.message}`);
+      const spawnError = new Error(`Failed to spawn gh process: ${result.error.message}`);
+      // The request may still have been processed by GitHub
+      spawnError.timedOut = result.error.code === 'ETIMEDOUT';
+      throw spawnError;
     }
     
     if (result.status !== 0) {
@@ -66,6 +84,101 @@ function ghApi(endpoint, method = 'GET', data = null) {
     console.error(`Error calling GitHub API: ${error.message}`);
     throw error;
   }
+}
+
+// Fetch every page of a paginated GitHub list endpoint
+function ghApiPaginated(baseEndpoint) {
+  const results = [];
+  const perPage = 100;
+  let page = 1;
+  while (true) {
+    const separator = baseEndpoint.includes('?') ? '&' : '?';
+    let batch;
+    try {
+      batch = ghApi(`${baseEndpoint}${separator}per_page=${perPage}&page=${page}`);
+    } catch (error) {
+      if (page === 1) {
+        throw error; // Nothing fetched yet - a real API failure, surface it
+      }
+      // Degrade gracefully on mid-pagination errors (e.g. GitHub's 3,000-file
+      // listing cap): keep the pages we already have instead of aborting.
+      console.error(`Pagination of ${baseEndpoint} stopped at page ${page}: ${error.message}`);
+      break;
+    }
+    if (!Array.isArray(batch) || batch.length === 0) {
+      break;
+    }
+    results.push(...batch);
+    if (batch.length < perPage) {
+      break;
+    }
+    page++;
+  }
+  return results;
+}
+
+// Normalize a finding title for duplicate comparison
+function normalizeTitle(title) {
+  return String(title || '').replace(/\s+/g, ' ').trim();
+}
+
+// Extract the finding title from a bot comment body. Bodies start with
+// "🤖 **Code Review Finding: {title}**" on their own line; the title itself
+// may contain "**" (e.g. "Forwarding **kwargs drops keys"), so take the whole
+// first line and strip only the closing bold marker.
+function extractFindingTitle(body) {
+  if (!body) return null;
+  const markerIndex = body.indexOf(BOT_COMMENT_MARKER);
+  if (markerIndex === -1) return null;
+  const start = markerIndex + BOT_COMMENT_MARKER.length;
+  const lineEnd = body.indexOf('\n', start);
+  let title = body.slice(start, lineEnd === -1 ? body.length : lineEnd).trimEnd();
+  if (title.endsWith('**')) {
+    title = title.slice(0, -2);
+  }
+  title = normalizeTitle(title);
+  return title || null;
+}
+
+// Collect findings already posted as inline comments on this PR, so re-reviews
+// don't post duplicate threads for unresolved findings (review dismissal does
+// not remove inline comments).
+function getExistingFindings() {
+  const existing = [];
+  try {
+    const comments = ghApiPaginated(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/comments`);
+    for (const comment of comments) {
+      // Only dedupe against comments this bot posted...
+      if (comment.user && comment.user.type && comment.user.type !== 'Bot') {
+        continue;
+      }
+      // ...that are still anchored to the current diff. An outdated comment
+      // (no current line/position) points at code that has since changed, so a
+      // re-raised finding there deserves a fresh, correctly-anchored thread.
+      const line = comment.line ?? null;
+      if (line === null && (comment.position === null || comment.position === undefined)) {
+        continue;
+      }
+      const title = extractFindingTitle(comment.body);
+      if (title && comment.path) {
+        existing.push({ path: comment.path, title, line });
+      }
+    }
+  } catch (error) {
+    console.error('Failed to fetch existing comments for dedup:', error.message);
+  }
+  return existing;
+}
+
+// A finding duplicates an existing thread when path and title match and the
+// lines are close (or the existing thread's line is unknown).
+function findExistingThread(existingFindings, file, title, line) {
+  const normalized = normalizeTitle(title);
+  return existingFindings.find(e =>
+    e.path === file &&
+    e.title === normalized &&
+    (e.line === null || Math.abs(e.line - line) <= DUPLICATE_LINE_TOLERANCE)
+  );
 }
 
 // Helper function to add reactions to a comment
@@ -129,6 +242,17 @@ function isOwnReview(review) {
 }
 
 // Find an existing review posted by this action
+// Check whether a review with this exact body exists on the current head commit
+function reviewWasCreated(reviewBody) {
+  try {
+    const reviews = ghApiPaginated(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`);
+    return reviews.some(r => r.body === reviewBody && r.commit_id === context.payload.pull_request.head.sha);
+  } catch (error) {
+    console.error('Could not check whether the review was created:', error.message);
+    return false;
+  }
+}
+
 function findExistingReview() {
   try {
     const reviews = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`);
@@ -304,7 +428,7 @@ async function run() {
     const reviewEvent = COMMENT_ONLY_MODE
       ? 'COMMENT'
       : (highSeverityCount > 0 ? 'REQUEST_CHANGES' : 'APPROVE');
-    const reviewBody = buildReviewSummary(newFindings, prSummary, analysisSummary);
+    let reviewBody = buildReviewSummary(newFindings, prSummary, analysisSummary);
 
     // Prepare review comments
     const reviewComments = [];
@@ -317,15 +441,21 @@ async function run() {
     }
 
     let fileMap = {};
+    const suppressedDuplicates = [];
+    const unanchoredFindings = [];
     if (!silenceClaudeCodeComments && newFindings.length > 0) {
-      // Get the PR diff to map file lines to diff positions
-      const prFiles = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/files?per_page=100`);
+      // Get the PR diff to map file lines to diff positions (paginated -
+      // PRs can have more than 100 changed files)
+      const prFiles = ghApiPaginated(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/files`);
 
       // Create a map of file paths to their diff information
       fileMap = {};
       prFiles.forEach(file => {
         fileMap[file.filename] = file;
       });
+
+      // Findings already posted as inline comments on a previous run
+      const existingFindings = getExistingFindings();
 
       // Process findings synchronously (gh cli doesn't support async well)
       for (const finding of newFindings) {
@@ -336,14 +466,29 @@ async function run() {
         const severity = finding.severity || 'HIGH';
         const category = finding.category || 'review_issue';
 
-        // Check if this file is part of the PR diff
+        // Check if this file is part of the PR diff. Keep the finding visible in
+        // the review body instead of dropping it (e.g. when a page of the file
+        // list could not be fetched).
         if (!fileMap[file]) {
-          console.log(`File ${file} not in PR diff, skipping`);
+          console.log(`File ${file} not in PR diff, listing finding in the review body`);
+          unanchoredFindings.push({ file, line, title, severity });
+          continue;
+        }
+
+        // Skip findings that already have an inline comment thread from a
+        // previous review run (dismissing a review keeps its comments, so
+        // re-posting would create duplicate threads)
+        const multiLineSuggestion = finding.suggestion && finding.suggestion_start_line &&
+          finding.suggestion_end_line && finding.suggestion_start_line !== finding.suggestion_end_line;
+        const anchorLine = multiLineSuggestion ? finding.suggestion_end_line : line;
+        if (findExistingThread(existingFindings, file, title, anchorLine)) {
+          console.log(`Finding "${title}" on ${file}:${anchorLine} already has a comment thread, skipping duplicate`);
+          suppressedDuplicates.push({ file, line: anchorLine, title });
           continue;
         }
 
         // Build the comment body
-        let commentBody = `🤖 **Code Review Finding: ${title}**\n\n`;
+        let commentBody = `${BOT_COMMENT_MARKER}${title}**\n\n`;
         commentBody += `**Severity:** ${severity}\n`;
         commentBody += `**Category:** ${category}\n`;
 
@@ -389,6 +534,25 @@ async function run() {
       console.log('No inline comments to add; posting summary review only');
     }
 
+    // Keep still-valid findings discoverable even when their inline comment
+    // was suppressed as a duplicate of an earlier thread (which may be
+    // anchored to an outdated diff position).
+    if (suppressedDuplicates.length > 0) {
+      const items = suppressedDuplicates
+        .map(d => `- \`${d.file}:${d.line}\`: ${d.title}`)
+        .join('\n');
+      reviewBody += `\n\n${suppressedDuplicates.length} previously reported finding${suppressedDuplicates.length === 1 ? '' : 's'} still appl${suppressedDuplicates.length === 1 ? 'ies' : 'y'} (see existing review threads):\n${items}`;
+    }
+
+    // Findings whose file could not be matched to the PR diff get no inline
+    // comment; list them so they are not silently lost.
+    if (unanchoredFindings.length > 0) {
+      const items = unanchoredFindings
+        .map(f => `- **${f.severity}** \`${f.file}:${f.line}\`: ${f.title}`)
+        .join('\n');
+      reviewBody += `\n\n${unanchoredFindings.length} finding${unanchoredFindings.length === 1 ? '' : 's'} could not be attached to the diff:\n${items}`;
+    }
+
     // Handle existing reviews - update in place if state unchanged, otherwise dismiss and recreate
     const existingReview = findExistingReview();
     const newState = COMMENT_ONLY_MODE
@@ -431,7 +595,7 @@ async function run() {
         reviewData.comments = reviewComments;
       }
 
-      const reviewResponse = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`, 'POST', reviewData);
+      const reviewResponse = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`, 'POST', reviewData, REVIEW_POST_TIMEOUT_MS);
 
       console.log(`Created review with ${reviewComments.length} inline comments`);
       
@@ -441,7 +605,14 @@ async function run() {
       }
     } catch (error) {
       console.error('Error creating review:', error);
-      
+
+      // A timed-out request may still have created the review; posting the
+      // comments individually would then duplicate every one of them.
+      if (error.timedOut && reviewWasCreated(reviewBody)) {
+        console.log('Review request timed out, but the review was created; skipping fallback');
+        return;
+      }
+
       // Fallback: try to create individual comments if review fails
       // This might happen if line numbers are outside the diff context
       console.log('Attempting fallback with adjusted line numbers...');

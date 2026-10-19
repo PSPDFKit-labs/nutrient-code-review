@@ -8,6 +8,7 @@ import os
 from unittest.mock import Mock, patch
 
 from claudecode.github_action_audit import GitHubActionClient
+from claudecode.constants import GITHUB_REQUEST_TIMEOUT
 
 
 class TestGitHubActionClient:
@@ -94,13 +95,15 @@ class TestGitHubActionClient:
         assert mock_get.call_count == 2
         mock_get.assert_any_call(
             'https://api.github.com/repos/owner/repo/pulls/123',
-            headers=client.headers
+            headers=client.headers,
+            timeout=GITHUB_REQUEST_TIMEOUT
         )
         # Check for paginated files request with params
         mock_get.assert_any_call(
             'https://api.github.com/repos/owner/repo/pulls/123/files',
             headers=client.headers,
-            params={'per_page': 100, 'page': 1}
+            params={'per_page': 100, 'page': 1},
+            timeout=GITHUB_REQUEST_TIMEOUT
         )
         
         # Verify result structure

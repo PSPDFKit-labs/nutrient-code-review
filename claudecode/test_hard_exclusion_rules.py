@@ -441,7 +441,17 @@ class TestHardExclusionRules:
                 "description": "No bounds checking on user input",
                 "file": "input.h",
                 "category": "security"
-            }
+            },
+            # C++ headers/sources and Objective-C files are memory-unsafe too
+            *[
+                {
+                    "title": "Buffer overflow",
+                    "description": "Stack buffer overflow in memcpy",
+                    "file": f"src/file.{ext}",
+                    "category": "security"
+                }
+                for ext in ("hpp", "hh", "hxx", "cxx", "m", "mm")
+            ],
         ]
         
         for finding in cpp_memory_findings:

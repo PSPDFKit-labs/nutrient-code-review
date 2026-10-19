@@ -1,5 +1,6 @@
 """Guards for what pull request content can influence in the action and workflow."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -47,3 +48,32 @@ def test_repository_workflow_gates_comment_triggered_runs():
     assert "admin|maintain|write" in gate_script
     for step in steps[1:]:
         assert step["if"] == "github.event_name == 'pull_request' || steps.gate.outputs.allowed == 'true'"
+
+
+def test_snapshot_scripts_are_read_only():
+    _, steps = load_steps()
+    snapshot = steps[step_index(steps, "Snapshot action files")]["run"]
+    assert 'chmod -R a-w "$ACTION_DIR/scripts"' in snapshot
+    # A previous read-only snapshot must still be removable
+    assert snapshot.index('chmod -R u+w "$ACTION_DIR"') < snapshot.index('rm -rf "$ACTION_DIR"')
+
+
+def test_claude_code_cli_is_pinned():
+    action, steps = load_steps()
+    default = action["inputs"]["claude-code-version"]["default"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", default)
+    install = steps[step_index(steps, "Install dependencies")]
+    assert install["env"]["CLAUDE_CODE_VERSION"] == "${{ inputs.claude-code-version }}"
+    assert 'npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"' in install["run"]
+
+
+def test_git_credentials_hidden_during_scan_and_restored():
+    _, steps = load_steps()
+    scan = steps[step_index(steps, "Run ClaudeCode scan")]["run"]
+    trap = scan.index("trap '")
+    hide = scan.index('git-credentials.sh" hide')
+    review = scan.index("github_action_audit.py")
+    # The restore trap is installed before anything is hidden, and hiding
+    # happens before the review runs.
+    assert trap < hide < review
+    assert "git-credentials.sh\" restore" in scan[trap:hide]

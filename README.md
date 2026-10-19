@@ -103,7 +103,15 @@ This action's GitHub Action dependencies require a runner that supports the Node
 
 Comment-triggered reviews run with access to your secrets even on pull requests from forks, so by default only collaborators with write access can start them (`comment-trigger-permission`). The review never loads Claude Code settings, hooks, or MCP servers from the pull request's checkout; `CLAUDE.md` files are read as plain text and passed to the review as project guidelines. When the action checks out the PR itself (comment triggers, or `checkout-pr: true`), it first copies its own scripts, so a PR cannot replace the tooling even if the action is used from the workspace (`uses: ./`). If your workflow checks out the PR head before a workspace-local `uses:`, that run uses the PR's version of the action.
 
-This action is not hardened against prompt injection attacks and should only be used to review trusted PRs. We recommend [configuring your repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#controlling-changes-from-forks-to-workflows-in-public-repositories) to use the "Require approval for all external contributors" option to ensure workflows only run after a maintainer has reviewed the PR.
+This action also limits what a prompt-injected review could do:
+- The review runs with only the environment variables Claude Code needs and a fresh home directory. Apart from the Claude API key, it never sees `GITHUB_TOKEN`, Actions runtime tokens or other job secrets.
+- Credentials that `actions/checkout` stored in the checkout's git config are hidden while the review runs and restored afterwards.
+- Claude Code runs in `dontAsk` permission mode, so only its built-in read-only rules apply: plain `git diff`, `log`, `show`, `blame` and `status` and file reads inside the checkout work, while everything else is refused, including commands that write files, run programs or read outside the checkout. Network and file-editing tools are blocked as well.
+- The Claude Code CLI is pinned (`claude-code-version`), because its rules are part of this boundary.
+- Known secret values are redacted from the results.
+- The review prompt tells Claude to treat instructions found in PR content as data, and to report manipulation attempts in the PR as findings.
+
+These measures raise the bar but are not a sandbox and cannot eliminate prompt-injection risk — the action should still only be used to review trusted PRs. We recommend [configuring your repository](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#controlling-changes-from-forks-to-workflows-in-public-repositories) to use the "Require approval for all external contributors" option to ensure workflows only run after a maintainer has reviewed the PR.
 
 ## Configuration Options
 
@@ -117,6 +125,7 @@ This action is not hardened against prompt injection attacks and should only be 
 | `upload-results` | Whether to upload results as artifacts | `true` | No |
 | `exclude-directories` | Comma-separated list of directories to exclude from scanning | None | No |
 | `claude-model` | Claude [model name](https://docs.anthropic.com/en/docs/about-claude/models/overview#model-names) to use. Defaults to Opus 5.5 (1M context). For very large PRs or to reduce cost, consider `claude-sonnet-5-5` (also 1M context, faster and cheaper). | `claude-opus-5-5` | No |
+| `claude-code-version` | Claude Code CLI version to install. Pinned to a tested release because the CLI decides which commands the review may run; raise it deliberately, e.g. for a newer model. | `2.1.301` | No |
 | `claudecode-timeout` | Timeout for ClaudeCode analysis in minutes | `20` | No |
 | `max-diff-chars` | Maximum diff characters to include in prompt. Set to `0` for agentic mode (Claude uses git commands to explore). See [Diff Size Configuration](#diff-size-configuration) below. | `800000` | No |
 | `max-diff-lines` | **[DEPRECATED]** Use `max-diff-chars` instead. Converts lines to chars (line × 80). | None | No |

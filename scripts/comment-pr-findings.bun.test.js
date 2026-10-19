@@ -894,11 +894,16 @@ describe('comment-pr-findings.js', () => {
         }
       });
 
+      let reviewDataCaptured = null;
       spawnSyncSpy.mockImplementation((cmd, args, options) => {
         if (cmd === 'gh' && args.includes('api')) {
           const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
           if (endpoint.includes('/pulls/123/files')) {
             return { status: 0, stdout: JSON.stringify([{ filename: 'other-file.py' }]), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST' && options && options.input) {
+            reviewDataCaptured = JSON.parse(options.input);
           }
           return { status: 0, stdout: '{}', stderr: '' };
         }
@@ -906,8 +911,12 @@ describe('comment-pr-findings.js', () => {
       });
 
       await import('./comment-pr-findings.js');
-      expect(consoleLogSpy).toHaveBeenCalledWith('File not-in-diff.py not in PR diff, skipping');
+      expect(consoleLogSpy).toHaveBeenCalledWith('File not-in-diff.py not in PR diff, listing finding in the review body');
       expect(consoleLogSpy).toHaveBeenCalledWith('No inline comments to add; posting summary review only');
+      // The finding is not silently dropped: it is listed in the review body
+      expect(reviewDataCaptured).toBeTruthy();
+      expect(reviewDataCaptured.body).toContain('could not be attached to the diff');
+      expect(reviewDataCaptured.body).toContain('`not-in-diff.py:10`: Test finding');
     });
   });
 
@@ -1441,6 +1450,388 @@ describe('comment-pr-findings.js', () => {
       expect(reviewDismissed).toBe(true);
       expect(reviewDataCaptured).toBeTruthy();
       expect(reviewDataCaptured.event).toBe('COMMENT');
+    });
+  });
+
+  describe('PR files pagination', () => {
+    test('should find files beyond the first page of 100', async () => {
+      const mockFindings = [{
+        file: 'page2-file.py',
+        line: 5,
+        title: 'Issue in late file',
+        description: 'Bug in a file beyond page 1',
+        severity: 'HIGH',
+        category: 'correctness'
+      }];
+
+      // Page 1: exactly 100 files (forces a second page fetch); page 2 holds the target file
+      const page1Files = Array.from({ length: 100 }, (_, i) => ({
+        filename: `file${i}.py`,
+        patch: '@@ -1,1 +1,1 @@'
+      }));
+      const page2Files = [{ filename: 'page2-file.py', patch: '@@ -5,1 +5,1 @@' }];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 101, high_severity: 1, medium_severity: 0, low_severity: 0 });
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/files')) {
+            if (endpoint.includes('&page=1')) {
+              return { status: 0, stdout: JSON.stringify(page1Files), stderr: '' };
+            }
+            if (endpoint.includes('&page=2')) {
+              return { status: 0, stdout: JSON.stringify(page2Files), stderr: '' };
+            }
+            return { status: 0, stdout: '[]', stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+            return { status: 0, stdout: '[]', stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              reviewDataCaptured = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured).toBeTruthy();
+      expect(reviewDataCaptured.comments).toHaveLength(1);
+      expect(reviewDataCaptured.comments[0].path).toBe('page2-file.py');
+      // Every gh call is bounded so a hung request can't stall the job;
+      // creating the review gets more time than other calls
+      for (const call of spawnSyncSpy.mock.calls.filter(c => c[0] === 'gh')) {
+        const isReviewPost = call[1][1].endsWith('/reviews') && call[1].includes('POST');
+        expect(call[2].timeout).toBe(isReviewPost ? 120000 : 30000);
+      }
+    });
+  });
+
+  describe('Review creation timeout', () => {
+    async function runWithTimedOutReview(reviewsAfterTimeout) {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify([{ file: 'test.py', line: 5, title: 'Bug', description: 'd', severity: 'MEDIUM', category: 'correctness' }]);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 0, medium_severity: 1, low_severity: 0 });
+        }
+      });
+
+      let postedReviewBody = null;
+      const individualCommentPosts = [];
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        const endpoint = args[1];
+        const method = args[args.indexOf('--method') + 1] || 'GET';
+        const firstPage = !endpoint.includes('page=') || endpoint.includes('&page=1');
+        if (endpoint.includes('/pulls/123/files')) {
+          return { status: 0, stdout: JSON.stringify(firstPage ? [{ filename: 'test.py', patch: '@@ -1,10 +1,10 @@' }] : []), stderr: '' };
+        }
+        if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+          postedReviewBody = JSON.parse(options.input).body;
+          return { status: null, stdout: '', stderr: '', error: Object.assign(new Error('spawnSync gh ETIMEDOUT'), { code: 'ETIMEDOUT' }) };
+        }
+        if (endpoint.includes('/pulls/123/reviews') && method === 'GET') {
+          const reviews = firstPage ? reviewsAfterTimeout(postedReviewBody) : [];
+          return { status: 0, stdout: JSON.stringify(reviews), stderr: '' };
+        }
+        if (endpoint.includes('/pulls/123/comments') && method === 'POST') {
+          individualCommentPosts.push(JSON.parse(options.input));
+          return { status: 0, stdout: '{"id": 1}', stderr: '' };
+        }
+        return { status: 0, stdout: '[]', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+      return individualCommentPosts;
+    }
+
+    test('should not re-post comments when the timed-out review was created', async () => {
+      const posts = await runWithTimedOutReview(body => (body ? [{ id: 9, body, commit_id: 'abc123' }] : []));
+      expect(posts).toHaveLength(0);
+    });
+
+    test('should fall back to individual comments when the review was not created', async () => {
+      const posts = await runWithTimedOutReview(() => []);
+      expect(posts).toHaveLength(1);
+      expect(posts[0].path).toBe('test.py');
+    });
+  });
+
+  describe('Finding deduplication', () => {
+    test('should not re-post findings that already have inline comment threads', async () => {
+      const mockFindings = [
+        {
+          file: 'test.py',
+          line: 10,
+          title: 'Already reported issue',
+          description: 'This was reported in a previous run',
+          severity: 'HIGH',
+          category: 'security'
+        },
+        {
+          file: 'test.py',
+          line: 20,
+          title: 'Brand new issue',
+          description: 'This one is new',
+          severity: 'MEDIUM',
+          category: 'correctness'
+        }
+      ];
+
+      const mockPrFiles = [{ filename: 'test.py', patch: '@@ -10,20 +10,20 @@' }];
+
+      // An inline comment from a previous review run for the first finding
+      // (still anchored to a live diff position, posted by the bot)
+      const existingComments = [{
+        path: 'test.py',
+        line: 11, // line drifted, but same finding title
+        position: 5,
+        user: { type: 'Bot' },
+        body: '🤖 **Code Review Finding: Already reported issue**\n\n**Severity:** HIGH\n'
+      }];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 1, low_severity: 0 });
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(existingComments), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              reviewDataCaptured = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured).toBeTruthy();
+      expect(reviewDataCaptured.comments).toHaveLength(1);
+      expect(reviewDataCaptured.comments[0].body).toContain('Brand new issue');
+      expect(reviewDataCaptured.comments[0].body).not.toContain('Already reported issue');
+      // Suppressed duplicates stay discoverable via the review summary body
+      expect(reviewDataCaptured.body).toContain('previously reported finding');
+      expect(reviewDataCaptured.body).toContain('Already reported issue');
+    });
+
+    test('should re-post findings whose previous thread is outdated (position null)', async () => {
+      const mockFindings = [{
+        file: 'test.py',
+        line: 10,
+        title: 'Persistent issue',
+        description: 'Still present, but the old thread is outdated',
+        severity: 'HIGH',
+        category: 'security'
+      }];
+
+      const mockPrFiles = [{ filename: 'test.py', patch: '@@ -10,1 +10,1 @@' }];
+
+      // Same path+title, but the comment is anchored to an outdated diff
+      // position - it must NOT suppress a fresh, correctly-anchored comment
+      const existingComments = [{
+        path: 'test.py',
+        line: null,
+        position: null,
+        user: { type: 'Bot' },
+        body: '🤖 **Code Review Finding: Persistent issue**\n\n**Severity:** HIGH\n'
+      }];
+
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(mockFindings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 1, medium_severity: 0, low_severity: 0 });
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: JSON.stringify(mockPrFiles), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(existingComments), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+            if (options && options.input) {
+              reviewDataCaptured = JSON.parse(options.input);
+            }
+            return { status: 0, stdout: '{}', stderr: '' };
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured).toBeTruthy();
+      expect(reviewDataCaptured.comments).toHaveLength(1);
+      expect(reviewDataCaptured.comments[0].body).toContain('Persistent issue');
+    });
+
+    // Shared harness for the dedup cases below: page-aware mocks so a broken
+    // pagination stop condition can't loop forever.
+    async function runWithExistingComments(findings, existingComments, prFiles = [{ filename: 'test.py', patch: '@@ -1,300 +1,300 @@' }]) {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(findings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 0, medium_severity: findings.length, low_severity: 0 });
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+          const firstPage = !endpoint.includes('page=') || endpoint.includes('&page=1');
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: JSON.stringify(firstPage ? prFiles : []), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(firstPage ? existingComments : []), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST' && options && options.input) {
+            reviewDataCaptured = JSON.parse(options.input);
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+      return reviewDataCaptured;
+    }
+
+    function botComment(title, line) {
+      return {
+        path: 'test.py', line, position: 3, user: { type: 'Bot' },
+        body: `🤖 **Code Review Finding: ${title}**\n\n**Severity:** MEDIUM\n`
+      };
+    }
+
+    function finding(title, line) {
+      return { file: 'test.py', line, title, description: title, severity: 'MEDIUM', category: 'correctness' };
+    }
+
+    test('should post a same-title finding at a different line', async () => {
+      const review = await runWithExistingComments(
+        [finding('Missing null check', 10), finding('Missing null check', 200)],
+        [botComment('Missing null check', 10)]
+      );
+
+      expect(review.comments).toHaveLength(1);
+      expect(review.comments[0].line).toBe(200);
+      expect(review.body).toContain('`test.py:10`: Missing null check');
+    });
+
+    test('should dedupe titles that contain bold markers or extra whitespace', async () => {
+      const review = await runWithExistingComments(
+        [finding('Forwarding **kwargs drops keys', 42), finding('  Spaced   title ', 50)],
+        [botComment('Forwarding **kwargs drops keys', 42), botComment('Spaced title', 51)]
+      );
+
+      expect(review.comments ?? []).toHaveLength(0);
+      expect(review.body).toContain('2 previously reported findings still apply');
+    });
+
+    test('should not dedupe against comments from human users', async () => {
+      const humanComment = { ...botComment('Missing null check', 10), user: { type: 'User' } };
+      const review = await runWithExistingComments([finding('Missing null check', 10)], [humanComment]);
+
+      expect(review.comments).toHaveLength(1);
+    });
+
+    test('should post findings when existing comments cannot be fetched', async () => {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify([finding('Missing null check', 10)]);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 0, medium_severity: 1, low_severity: 0 });
+        }
+      });
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        const endpoint = args[1];
+        const method = args[args.indexOf('--method') + 1] || 'GET';
+        if (endpoint.includes('/pulls/123/files')) {
+          return { status: 0, stdout: JSON.stringify([{ filename: 'test.py', patch: '@@ -1,20 +1,20 @@' }]), stderr: '' };
+        }
+        if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+          return { status: 1, stdout: '', stderr: 'HTTP 502' };
+        }
+        if (endpoint.includes('/pulls/123/reviews') && method === 'POST' && options && options.input) {
+          reviewDataCaptured = JSON.parse(options.input);
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured.comments).toHaveLength(1);
     });
   });
 });
