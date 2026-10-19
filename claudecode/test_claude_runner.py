@@ -170,18 +170,23 @@ class TestSimpleClaudeRunner:
         assert 'json' in cmd
         assert '--model' in cmd
         assert DEFAULT_CLAUDE_MODEL in cmd
-        assert '--allowed-tools' in cmd
-        allowed = cmd[cmd.index('--allowed-tools') + 1]
-        assert 'Bash(git diff:*)' in allowed
-        assert 'Bash(git log:*)' in allowed
-        assert 'Bash(git show:*)' in allowed
+        # No allow rules: a Bash(git log:*) prefix rule would also approve
+        # `git log --output=<file>` and similar write/read primitives that
+        # Claude Code's built-in read-only classifier otherwise refuses.
+        assert '--allowed-tools' not in cmd
+        assert '--allowedTools' not in cmd
         assert '--disallowed-tools' in cmd
+        denylist_index = cmd.index('--disallowed-tools') + 1
+        assert not any('Bash(' in arg for i, arg in enumerate(cmd) if i != denylist_index)
         disallowed = cmd[cmd.index('--disallowed-tools') + 1]
         assert 'Bash(ps:*)' in disallowed
         assert 'Bash(curl:*)' in disallowed
         assert 'Bash(wget:*)' in disallowed
+        assert 'Bash(nc:*)' in disallowed
         assert 'WebFetch' in disallowed
         assert 'WebSearch' in disallowed
+        for tool in ('Write', 'Edit', 'NotebookEdit'):
+            assert tool in disallowed.split(',')
         assert '--json-schema' in cmd
         # PR-supplied .claude settings and .mcp.json must not load
         assert cmd[cmd.index('--setting-sources') + 1] == 'user'

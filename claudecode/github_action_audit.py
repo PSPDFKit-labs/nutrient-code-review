@@ -7,7 +7,10 @@ Runs Claude Code review on current working directory and outputs findings to std
 import os
 import sys
 import json
+import atexit
+import shutil
 import subprocess
+import tempfile
 import requests
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
@@ -284,6 +287,14 @@ class GitHubActionClient:
 
         logger.info(f"Fetched {len(fetched_files)} files for PR #{pr_number} (total in PR: {total_files_in_pr})")
 
+        # Files that were never fetched (a failed page, or GitHub's file-list
+        # cap) are missing from the diff even if the budget wasn't exhausted,
+        # so the prompt must not claim the diff is complete.
+        if len(fetched_files) < total_files_in_pr and not is_truncated:
+            is_truncated = True
+            logger.warning(f"Only {len(fetched_files)} of {total_files_in_pr} files could be fetched; "
+                           "treating the diff as partial")
+
         pr_diff = '\n'.join(diff_sections)
         diff_char_count = len(pr_diff)
 
@@ -411,40 +422,6 @@ class GitHubActionClient:
 
         return all_comments
 
-    @staticmethod
-    def has_potential_user_reactions(comment: Dict[str, Any]) -> bool:
-        """Decide whether a comment could have human reactions worth fetching.
-
-        The comments API embeds a reactions summary. The bot seeds each of its
-        comments with one 👍 and one 👎, so a summary that is at most those two
-        seed thumbs cannot contain human reactions — skipping the per-comment
-        reactions API call (which is needed to tell bot and human reactions
-        apart) avoids an N+1 request pattern on PRs with many bot comments.
-
-        Args:
-            comment: Comment dictionary from GitHub API
-
-        Returns:
-            True if the detailed reactions should be fetched
-        """
-        summary = comment.get('reactions')
-        if not isinstance(summary, dict):
-            return True  # No summary available - fetch to be safe
-
-        total = summary.get('total_count')
-        if not isinstance(total, int):
-            return True
-
-        if total == 0:
-            return False
-
-        plus_one = summary.get('+1', 0)
-        minus_one = summary.get('-1', 0)
-        # Skip only when the summary is exactly the bot's two seed thumbs.
-        # A single thumb may be a human reaction on a comment whose seeding
-        # partially failed, so anything else is fetched to be safe.
-        return not (total == 2 and plus_one == 1 and minus_one == 1)
-
     def get_comment_reactions(self, repo_name: str, comment_id: int) -> Dict[str, int]:
         """Get reactions for a specific comment, excluding bot reactions.
 
@@ -543,6 +520,55 @@ class GitHubActionClient:
         return ''.join(filtered_sections)
 
 
+# Environment variables passed to the Claude Code review subprocess. Everything
+# else - GitHub tokens, ACTIONS_* runtime/OIDC tokens, GITHUB_ENV/GITHUB_OUTPUT
+# file paths, job-level secrets - is withheld: the review reads untrusted PR
+# content, so it only gets what the CLI needs to reach the API.
+CLAUDE_ENV_ALLOWLIST = (
+    'PATH', 'USER', 'LOGNAME', 'SHELL', 'TERM', 'TZ', 'TMPDIR',
+    'LANG', 'LC_ALL', 'LC_CTYPE',
+    'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL',
+    # Needed to reach the API from proxied or custom-CA (self-hosted) runners
+    'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+    'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+)
+
+# Values that must never appear in output (results JSON, logs, PR comments)
+SECRET_ENV_VARS = (
+    'ANTHROPIC_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN',
+    'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_RUNTIME_TOKEN',
+)
+
+
+def build_review_env(repo_dir: Path) -> Dict[str, str]:
+    """Build the environment for the Claude Code review subprocess.
+
+    Uses an allowlist plus a fresh HOME, so the reviewer sees neither job
+    secrets nor the runner user's real home (git credentials, Claude settings
+    and hooks on self-hosted runners). The fresh HOME's git config only marks
+    the checkout as a safe directory so read-only git commands keep working
+    when the workspace is owned by another user (container jobs).
+    """
+    env = {k: v for k, v in os.environ.items() if k in CLAUDE_ENV_ALLOWLIST}
+    home = tempfile.mkdtemp(prefix='claude-review-home-', dir=os.environ.get('RUNNER_TEMP') or None)
+    atexit.register(shutil.rmtree, home, True)
+    Path(home, '.gitconfig').write_text(f"[safe]\n\tdirectory = {Path(repo_dir).resolve()}\n")
+    env['HOME'] = home
+    # Keep the pinned CLI version for the whole run and skip telemetry traffic
+    env['DISABLE_AUTOUPDATER'] = '1'
+    env['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] = '1'
+    return env
+
+
+def redact_secrets(text: str) -> str:
+    """Replace known secret values in text before it is printed or published."""
+    for name in SECRET_ENV_VARS:
+        value = os.environ.get(name, '')
+        if len(value) >= 8:
+            text = text.replace(value, f'[REDACTED {name}]')
+    return text
+
+
 class SimpleClaudeRunner:
     """Simplified Claude Code runner for GitHub Actions."""
     
@@ -584,20 +610,16 @@ class SimpleClaudeRunner:
             # permissions, plugins) and .mcp.json servers: a PR must not be able
             # to run commands in the review process.
             #
-            # Tool hardening: the review only needs local repo exploration.
-            # Bash is restricted to an allowlist of read-only git commands
-            # (everything else is denied in headless mode), so a
-            # prompt-injection attempt in a malicious PR cannot run arbitrary
-            # commands, exfiltrate data, or fetch attacker-controlled
-            # instructions. Network tools and ps are additionally denylisted
-            # as defense in depth.
-            allowed_tools = ','.join([
-                'Bash(git diff:*)',
-                'Bash(git log:*)',
-                'Bash(git show:*)',
-                'Bash(git status:*)',
-                'Bash(git blame:*)',
-            ])
+            # Tool hardening: no Bash allow rules are passed on purpose. Claude
+            # Code's built-in read-only classifier already auto-approves plain
+            # git diff/log/show/blame/status and file reads inside the checkout,
+            # and refuses (headless: denies) risky variants such as
+            # `git log --output=<file>`, `git blame --contents=<file>`,
+            # `--ext-diff` and reads outside the working directory. A
+            # `Bash(git log:*)` prefix rule would approve those variants too,
+            # turning a prompt injection into arbitrary file writes and command
+            # execution. The denylist below additionally blocks network tools,
+            # process listings and file-modifying tools.
             disallowed_tools = ','.join([
                 'Bash(ps:*)',
                 'Bash(curl:*)',
@@ -605,6 +627,9 @@ class SimpleClaudeRunner:
                 'Bash(nc:*)',
                 'WebFetch',
                 'WebSearch',
+                'Write',
+                'Edit',
+                'NotebookEdit',
             ])
             cmd = [
                 'claude',
@@ -612,19 +637,12 @@ class SimpleClaudeRunner:
                 '--model', DEFAULT_CLAUDE_MODEL,
                 '--setting-sources', 'user',
                 '--strict-mcp-config',
-                '--allowed-tools', allowed_tools,
                 '--disallowed-tools', disallowed_tools,
                 '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA)
             ]
 
-            # Credential hygiene: the review subprocess doesn't need GitHub
-            # credentials (the repo is already checked out and diffs are
-            # local). Stripping them limits the blast radius of any
-            # prompt-injected tool use.
-            subprocess_env = {
-                k: v for k, v in os.environ.items()
-                if k not in ('GITHUB_TOKEN', 'GH_TOKEN')
-            }
+            # Credential hygiene: only allowlisted variables and a fresh HOME
+            subprocess_env = build_review_env(repo_dir)
 
             # Run Claude Code with retry logic
             NUM_RETRIES = 3
@@ -652,7 +670,7 @@ class SimpleClaudeRunner:
                         f"Failed to parse Claude stdout as JSON ({parse_error}). "
                         f"Raw output (first 2000 chars): {result.stdout[:2000]!r}"
                     )
-                    print(f"[Error] {last_parse_error}", file=sys.stderr)
+                    print(redact_secrets(f"[Error] {last_parse_error}"), file=sys.stderr)
 
                 if success:
                     # Check for "Prompt is too long" error that should trigger fallback to agentic mode
@@ -1146,13 +1164,8 @@ def main():
                 bot_comment_threads = []
                 for comment in pr_comments:
                     if is_bot_comment(comment):
-                        # This is a bot comment (thread root). Only hit the
-                        # reactions endpoint when the embedded summary suggests
-                        # there may be human reactions (avoids N+1 API calls).
-                        if github_client.has_potential_user_reactions(comment):
-                            reactions = github_client.get_comment_reactions(repo_name, comment['id'])
-                        else:
-                            reactions = {}
+                        # This is a bot comment (thread root)
+                        reactions = github_client.get_comment_reactions(repo_name, comment['id'])
 
                         # Find replies to this comment
                         replies = [
@@ -1248,7 +1261,7 @@ def main():
                 all_findings.append(finding)
 
         except AuditError as e:
-            print(json.dumps({'error': f'Code review failed: {str(e)}'}))
+            print(redact_secrets(json.dumps({'error': f'Code review failed: {str(e)}'})))
             sys.exit(EXIT_GENERAL_ERROR)
 
         # Filter findings to reduce false positives
@@ -1320,13 +1333,13 @@ def main():
         }
         
         # Output JSON to stdout
-        print(json.dumps(output, indent=2))
+        print(redact_secrets(json.dumps(output, indent=2)))
 
         # Exit with appropriate code
         sys.exit(EXIT_GENERAL_ERROR if high_count > 0 else EXIT_SUCCESS)
         
     except Exception as e:
-        print(json.dumps({'error': f'Unexpected error: {str(e)}'}))
+        print(redact_secrets(json.dumps({'error': f'Unexpected error: {str(e)}'})))
         sys.exit(EXIT_CONFIGURATION_ERROR)
 
 

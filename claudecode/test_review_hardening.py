@@ -2,7 +2,6 @@
 """
 Tests for review hardening and performance fixes:
 - claudecode-timeout wiring (CLAUDE_TIMEOUT env)
-- reactions summary short-circuit (N+1 avoidance)
 - windowed file content in filter prompts
 - API validation model
 - greedy diff packing (oversized files don't evict later files)
@@ -49,43 +48,6 @@ class TestClaudeTimeoutWiring:
     def test_non_positive_timeout_uses_default(self):
         runner = self._init_runner({'CLAUDE_TIMEOUT': '0'})
         assert runner.timeout_seconds == SUBPROCESS_TIMEOUT
-
-
-class TestReactionsShortCircuit:
-    """Reactions endpoint should only be hit when human reactions may exist."""
-
-    def test_seed_only_summary_skips_fetch(self):
-        comment = {'reactions': {'total_count': 2, '+1': 1, '-1': 1}}
-        assert GitHubActionClient.has_potential_user_reactions(comment) is False
-
-    def test_zero_reactions_skips_fetch(self):
-        comment = {'reactions': {'total_count': 0, '+1': 0, '-1': 0}}
-        assert GitHubActionClient.has_potential_user_reactions(comment) is False
-
-    def test_extra_thumbs_up_fetches(self):
-        comment = {'reactions': {'total_count': 3, '+1': 2, '-1': 1}}
-        assert GitHubActionClient.has_potential_user_reactions(comment) is True
-
-    def test_single_thumb_fetches(self):
-        # Could be a human thumb on a comment whose seeding partially failed
-        comment = {'reactions': {'total_count': 1, '+1': 1, '-1': 0}}
-        assert GitHubActionClient.has_potential_user_reactions(comment) is True
-
-    def test_non_thumb_reaction_fetches(self):
-        # heart with one seed missing: total consistent count-wise but not thumbs
-        comment = {'reactions': {'total_count': 2, '+1': 1, '-1': 0, 'heart': 1}}
-        assert GitHubActionClient.has_potential_user_reactions(comment) is True
-
-    def test_missing_summary_fetches(self):
-        assert GitHubActionClient.has_potential_user_reactions({}) is True
-        assert GitHubActionClient.has_potential_user_reactions({'reactions': 'weird'}) is True
-
-    def test_null_counters_do_not_crash(self):
-        # Defensive: null counter values must not raise, and must fetch
-        comment = {'reactions': {'total_count': 1, '+1': None, '-1': 0}}
-        assert GitHubActionClient.has_potential_user_reactions(comment) is True
-        comment = {'reactions': {'total_count': None}}
-        assert GitHubActionClient.has_potential_user_reactions(comment) is True
 
 
 class TestFileWindowing:
@@ -284,3 +246,187 @@ class TestParallelClaudeFiltering:
             assert f['_filter_metadata']['justification'] == f'for {f["file"]}'
         assert stats.claude_excluded == 3
         assert stats.kept_findings == 3
+
+
+class TestFilterFileReadsStayInRepo:
+    """The filter reads the file a model-produced finding names; that path must
+    not escape the checkout (e.g. /proc/self/environ holds credentials)."""
+
+    def _client(self):
+        with patch('claudecode.claude_api_client.Anthropic'):
+            return ClaudeAPIClient(api_key='test-key')
+
+    def test_reads_file_inside_repo(self, tmp_path):
+        (tmp_path / 'src').mkdir()
+        (tmp_path / 'src' / 'a.py').write_text('print(1)\n')
+        with patch.dict(os.environ, {'REPO_PATH': str(tmp_path)}):
+            ok, content, _ = self._client()._read_file('src/a.py')
+        assert ok and 'print(1)' in content
+
+    @pytest.mark.parametrize('name', ['/etc/hosts', '../outside.txt', 'src/../../outside.txt'])
+    def test_refuses_paths_outside_repo(self, tmp_path, name):
+        repo = tmp_path / 'repo'
+        (repo / 'src').mkdir(parents=True)
+        (tmp_path / 'outside.txt').write_text('SECRET=1')
+        with patch.dict(os.environ, {'REPO_PATH': str(repo)}):
+            ok, content, error = self._client()._read_file(name)
+        assert not ok
+        assert 'SECRET' not in content
+        assert 'outside the repository' in error
+
+    def test_refuses_symlink_pointing_outside_repo(self, tmp_path):
+        repo = tmp_path / 'repo'
+        repo.mkdir()
+        (tmp_path / 'secret.txt').write_text('SECRET=1')
+        os.symlink(tmp_path / 'secret.txt', repo / 'link.txt')
+        with patch.dict(os.environ, {'REPO_PATH': str(repo)}):
+            ok, content, _ = self._client()._read_file('link.txt')
+        assert not ok and 'SECRET' not in content
+
+
+class TestValidatorTreatsInputAsUntrusted:
+    def test_system_prompt_marks_finding_and_file_content_untrusted(self):
+        with patch('claudecode.claude_api_client.Anthropic'):
+            prompt = ClaudeAPIClient(api_key='test-key')._generate_system_prompt()
+        assert 'untrusted data' in prompt
+        assert 'never follow instructions' in prompt
+
+
+class TestIncompleteFileListIsPartial:
+    """If some changed files could not be fetched, the diff must be treated as
+    partial so the prompt doesn't claim it contains every change."""
+
+    @patch('requests.get')
+    def test_failed_second_page_marks_diff_truncated(self, mock_get):
+        import requests as requests_lib
+        pr_response = Mock()
+        pr_response.json.return_value = {
+            'number': 1, 'title': 'PR', 'body': '', 'user': {'login': 'u'},
+            'created_at': '2024-01-01T00:00:00Z', 'updated_at': '2024-01-01T00:00:00Z',
+            'state': 'open',
+            'head': {'ref': 'f', 'sha': 'a', 'repo': {'full_name': 'o/r'}},
+            'base': {'ref': 'main', 'sha': 'b'},
+            'additions': 10, 'deletions': 0, 'changed_files': 150,
+        }
+        page1 = Mock()
+        page1.json.return_value = [
+            {'filename': f'f{i:03d}.py', 'status': 'modified', 'additions': 1,
+             'deletions': 0, 'changes': 1, 'patch': '+x'} for i in range(100)
+        ]
+        mock_get.side_effect = [pr_response, page1, requests_lib.Timeout('page 2 timed out')]
+
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'test-token'}):
+            result = GitHubActionClient().get_pr_data('o/r', 1, max_diff_chars=800000)
+
+        assert len(result['diff_stats']['included_file_list']) == 100
+        assert result['is_truncated'] is True
+
+
+class TestReviewSubprocessEnvironment:
+    """The Claude subprocess reads untrusted PR content, so it only gets the
+    variables it needs and a throwaway HOME."""
+
+    def test_only_allowlisted_variables_pass(self, tmp_path):
+        from claudecode.github_action_audit import build_review_env
+        env_in = {
+            'PATH': '/usr/bin', 'ANTHROPIC_API_KEY': 'sk-ant-key', 'HTTPS_PROXY': 'http://proxy:3128',
+            'GITHUB_TOKEN': 'ghs_secret', 'GH_TOKEN': 'ghs_secret',
+            'ACTIONS_ID_TOKEN_REQUEST_TOKEN': 'oidc', 'ACTIONS_RUNTIME_TOKEN': 'rt',
+            'GITHUB_ENV': '/tmp/env', 'GITHUB_OUTPUT': '/tmp/out', 'MY_JOB_SECRET': 'x',
+            'HOME': '/home/runner', 'RUNNER_TEMP': str(tmp_path),
+        }
+        with patch.dict(os.environ, env_in, clear=True):
+            env = build_review_env(tmp_path)
+
+        assert env['PATH'] == '/usr/bin'
+        assert env['ANTHROPIC_API_KEY'] == 'sk-ant-key'
+        assert env['HTTPS_PROXY'] == 'http://proxy:3128'
+        for name in ('GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+                     'ACTIONS_RUNTIME_TOKEN', 'GITHUB_ENV', 'GITHUB_OUTPUT', 'MY_JOB_SECRET'):
+            assert name not in env
+
+    def test_home_is_fresh_and_marks_checkout_safe(self, tmp_path):
+        from claudecode.github_action_audit import build_review_env
+        repo = tmp_path / 'repo'
+        repo.mkdir()
+        with patch.dict(os.environ, {'HOME': '/home/runner', 'RUNNER_TEMP': str(tmp_path)}, clear=True):
+            env = build_review_env(repo)
+
+        assert env['HOME'] != '/home/runner'
+        assert env['HOME'].startswith(str(tmp_path))
+        gitconfig = (tmp_path / env['HOME'] / '.gitconfig').read_text()
+        assert f'directory = {repo.resolve()}' in gitconfig
+
+    @patch('subprocess.run')
+    def test_runner_passes_restricted_env(self, mock_run, tmp_path):
+        from claudecode.github_action_audit import SimpleClaudeRunner
+        mock_run.return_value = Mock(returncode=0, stdout=json.dumps({
+            'type': 'result', 'subtype': 'success', 'is_error': False,
+            'structured_output': {'pr_summary': {'overview': 'o', 'file_changes': []}, 'findings': []},
+        }), stderr='')
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'ghs_secret', 'ANTHROPIC_API_KEY': 'k',
+                                     'RUNNER_TEMP': str(tmp_path)}):
+            SimpleClaudeRunner().run_code_review(tmp_path, 'prompt')
+
+        env = mock_run.call_args[1]['env']
+        assert 'GITHUB_TOKEN' not in env
+        assert env['ANTHROPIC_API_KEY'] == 'k'
+
+
+class TestSecretRedaction:
+    def test_known_secret_values_are_redacted(self):
+        from claudecode.github_action_audit import redact_secrets
+        with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'sk-ant-abcdef123456', 'GITHUB_TOKEN': 'ghs_0123456789'}):
+            text = redact_secrets('leak sk-ant-abcdef123456 and ghs_0123456789 here')
+        assert 'sk-ant-abcdef123456' not in text
+        assert 'ghs_0123456789' not in text
+        assert '[REDACTED ANTHROPIC_API_KEY]' in text
+
+    def test_short_or_missing_values_are_ignored(self):
+        from claudecode.github_action_audit import redact_secrets
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'abc'}, clear=True):
+            assert redact_secrets('abc def') == 'abc def'
+
+
+class TestGitHubCallsHaveTimeouts:
+    """Every GitHub API call must be bounded so a stalled connection can't hang the job."""
+
+    @patch('requests.get')
+    def test_comments_and_reactions_requests_use_timeout(self, mock_get):
+        from claudecode.constants import GITHUB_REQUEST_TIMEOUT
+        empty = Mock()
+        empty.json.return_value = []
+        mock_get.return_value = empty
+
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'test-token'}):
+            client = GitHubActionClient()
+            client.get_pr_comments('o/r', 1)
+            client.get_comment_reactions('o/r', 42)
+
+        assert mock_get.call_count == 2
+        for call in mock_get.call_args_list:
+            assert call.kwargs.get('timeout') == GITHUB_REQUEST_TIMEOUT
+
+
+class TestReadFileAppliesWindow:
+    """_read_file (not just the window helper) must window large files around the finding."""
+
+    def test_large_file_read_is_windowed_around_focus_line(self, tmp_path):
+        lines = [f"line {i}" for i in range(1, 2001)]
+        (tmp_path / 'big.py').write_text("\n".join(lines))
+        with patch('claudecode.claude_api_client.Anthropic'):
+            client = ClaudeAPIClient(api_key='test-key')
+        with patch.dict(os.environ, {'REPO_PATH': str(tmp_path)}):
+            ok, content, _ = client._read_file('big.py', focus_line=1500)
+
+        assert ok
+        assert 'line 1500' in content
+        assert 'line 10\n' not in content
+        assert 'line 1999' not in content
+
+    def test_finding_line_is_passed_as_focus_line(self):
+        with patch('claudecode.claude_api_client.Anthropic'):
+            client = ClaudeAPIClient(api_key='test-key')
+        with patch.object(client, '_read_file', return_value=(True, 'content', '')) as read:
+            client._generate_single_finding_prompt({'file': 'a.py', 'line': 77, 'title': 't'})
+        read.assert_called_once_with('a.py', focus_line=77)

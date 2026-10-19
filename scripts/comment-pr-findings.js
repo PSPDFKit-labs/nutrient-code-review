@@ -10,6 +10,13 @@ const { spawnSync } = require('child_process');
 // PR Summary marker for identifying our summary sections
 const PR_SUMMARY_MARKER = '📋 **PR Summary:**';
 
+// Per-call timeout for gh api requests
+const GH_API_TIMEOUT_MS = 30000;
+
+// Existing threads within this many lines of a finding count as the same finding
+// (lines drift slightly between commits)
+const DUPLICATE_LINE_TOLERANCE = 3;
+
 // Marker prefix for inline finding comments (kept in sync with
 // claudecode/format_pr_comments.py BOT_COMMENT_MARKER)
 const BOT_COMMENT_MARKER = '🤖 **Code Review Finding: ';
@@ -53,7 +60,9 @@ function ghApi(endpoint, method = 'GET', data = null) {
     const result = spawnSync('gh', args, {
       encoding: 'utf8',
       input: data ? JSON.stringify(data) : undefined,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // A hung API call must not block the job until its own timeout
+      timeout: GH_API_TIMEOUT_MS
     });
     
     if (result.error) {
@@ -103,23 +112,34 @@ function ghApiPaginated(baseEndpoint) {
   return results;
 }
 
-// Extract the finding title from a bot comment body
-// (bodies start with "🤖 **Code Review Finding: {title}**")
+// Normalize a finding title for duplicate comparison
+function normalizeTitle(title) {
+  return String(title || '').replace(/\s+/g, ' ').trim();
+}
+
+// Extract the finding title from a bot comment body. Bodies start with
+// "🤖 **Code Review Finding: {title}**" on their own line; the title itself
+// may contain "**" (e.g. "Forwarding **kwargs drops keys"), so take the whole
+// first line and strip only the closing bold marker.
 function extractFindingTitle(body) {
   if (!body) return null;
   const markerIndex = body.indexOf(BOT_COMMENT_MARKER);
   if (markerIndex === -1) return null;
   const start = markerIndex + BOT_COMMENT_MARKER.length;
-  const end = body.indexOf('**', start);
-  if (end <= start) return null;
-  return body.slice(start, end).trim();
+  const lineEnd = body.indexOf('\n', start);
+  let title = body.slice(start, lineEnd === -1 ? body.length : lineEnd).trimEnd();
+  if (title.endsWith('**')) {
+    title = title.slice(0, -2);
+  }
+  title = normalizeTitle(title);
+  return title || null;
 }
 
-// Build a set of "path::title" keys for findings already posted as inline
-// comments on this PR, so re-reviews don't post duplicate threads for
-// unresolved findings (review dismissal does not remove inline comments).
-function getExistingFindingKeys() {
-  const keys = new Set();
+// Collect findings already posted as inline comments on this PR, so re-reviews
+// don't post duplicate threads for unresolved findings (review dismissal does
+// not remove inline comments).
+function getExistingFindings() {
+  const existing = [];
   try {
     const comments = ghApiPaginated(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/comments`);
     for (const comment of comments) {
@@ -127,21 +147,33 @@ function getExistingFindingKeys() {
       if (comment.user && comment.user.type && comment.user.type !== 'Bot') {
         continue;
       }
-      // ...that are still anchored to a live diff position. An outdated
-      // comment (position: null) points at code that has since changed, so a
+      // ...that are still anchored to the current diff. An outdated comment
+      // (no current line/position) points at code that has since changed, so a
       // re-raised finding there deserves a fresh, correctly-anchored thread.
-      if (comment.position === null || comment.position === undefined) {
+      const line = comment.line ?? null;
+      if (line === null && (comment.position === null || comment.position === undefined)) {
         continue;
       }
       const title = extractFindingTitle(comment.body);
       if (title && comment.path) {
-        keys.add(`${comment.path}::${title}`);
+        existing.push({ path: comment.path, title, line });
       }
     }
   } catch (error) {
     console.error('Failed to fetch existing comments for dedup:', error.message);
   }
-  return keys;
+  return existing;
+}
+
+// A finding duplicates an existing thread when path and title match and the
+// lines are close (or the existing thread's line is unknown).
+function findExistingThread(existingFindings, file, title, line) {
+  const normalized = normalizeTitle(title);
+  return existingFindings.find(e =>
+    e.path === file &&
+    e.title === normalized &&
+    (e.line === null || Math.abs(e.line - line) <= DUPLICATE_LINE_TOLERANCE)
+  );
 }
 
 // Helper function to add reactions to a comment
@@ -394,6 +426,7 @@ async function run() {
 
     let fileMap = {};
     const suppressedDuplicates = [];
+    const unanchoredFindings = [];
     if (!silenceClaudeCodeComments && newFindings.length > 0) {
       // Get the PR diff to map file lines to diff positions (paginated -
       // PRs can have more than 100 changed files)
@@ -406,7 +439,7 @@ async function run() {
       });
 
       // Findings already posted as inline comments on a previous run
-      const existingFindingKeys = getExistingFindingKeys();
+      const existingFindings = getExistingFindings();
 
       // Process findings synchronously (gh cli doesn't support async well)
       for (const finding of newFindings) {
@@ -417,18 +450,24 @@ async function run() {
         const severity = finding.severity || 'HIGH';
         const category = finding.category || 'review_issue';
 
-        // Check if this file is part of the PR diff
+        // Check if this file is part of the PR diff. Keep the finding visible in
+        // the review body instead of dropping it (e.g. when a page of the file
+        // list could not be fetched).
         if (!fileMap[file]) {
-          console.log(`File ${file} not in PR diff, skipping`);
+          console.log(`File ${file} not in PR diff, listing finding in the review body`);
+          unanchoredFindings.push({ file, line, title, severity });
           continue;
         }
 
         // Skip findings that already have an inline comment thread from a
         // previous review run (dismissing a review keeps its comments, so
         // re-posting would create duplicate threads)
-        if (existingFindingKeys.has(`${file}::${title}`)) {
-          console.log(`Finding "${title}" on ${file} already has a comment thread, skipping duplicate`);
-          suppressedDuplicates.push({ file, title });
+        const multiLineSuggestion = finding.suggestion && finding.suggestion_start_line &&
+          finding.suggestion_end_line && finding.suggestion_start_line !== finding.suggestion_end_line;
+        const anchorLine = multiLineSuggestion ? finding.suggestion_end_line : line;
+        if (findExistingThread(existingFindings, file, title, anchorLine)) {
+          console.log(`Finding "${title}" on ${file}:${anchorLine} already has a comment thread, skipping duplicate`);
+          suppressedDuplicates.push({ file, line: anchorLine, title });
           continue;
         }
 
@@ -484,9 +523,18 @@ async function run() {
     // anchored to an outdated diff position).
     if (suppressedDuplicates.length > 0) {
       const items = suppressedDuplicates
-        .map(d => `- \`${d.file}\`: ${d.title}`)
+        .map(d => `- \`${d.file}:${d.line}\`: ${d.title}`)
         .join('\n');
       reviewBody += `\n\n${suppressedDuplicates.length} previously reported finding${suppressedDuplicates.length === 1 ? '' : 's'} still appl${suppressedDuplicates.length === 1 ? 'ies' : 'y'} (see existing review threads):\n${items}`;
+    }
+
+    // Findings whose file could not be matched to the PR diff get no inline
+    // comment; list them so they are not silently lost.
+    if (unanchoredFindings.length > 0) {
+      const items = unanchoredFindings
+        .map(f => `- **${f.severity}** \`${f.file}:${f.line}\`: ${f.title}`)
+        .join('\n');
+      reviewBody += `\n\n${unanchoredFindings.length} finding${unanchoredFindings.length === 1 ? '' : 's'} could not be attached to the diff:\n${items}`;
     }
 
     // Handle existing reviews - update in place if state unchanged, otherwise dismiss and recreate

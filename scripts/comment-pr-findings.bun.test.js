@@ -894,11 +894,16 @@ describe('comment-pr-findings.js', () => {
         }
       });
 
+      let reviewDataCaptured = null;
       spawnSyncSpy.mockImplementation((cmd, args, options) => {
         if (cmd === 'gh' && args.includes('api')) {
           const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
           if (endpoint.includes('/pulls/123/files')) {
             return { status: 0, stdout: JSON.stringify([{ filename: 'other-file.py' }]), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST' && options && options.input) {
+            reviewDataCaptured = JSON.parse(options.input);
           }
           return { status: 0, stdout: '{}', stderr: '' };
         }
@@ -906,8 +911,12 @@ describe('comment-pr-findings.js', () => {
       });
 
       await import('./comment-pr-findings.js');
-      expect(consoleLogSpy).toHaveBeenCalledWith('File not-in-diff.py not in PR diff, skipping');
+      expect(consoleLogSpy).toHaveBeenCalledWith('File not-in-diff.py not in PR diff, listing finding in the review body');
       expect(consoleLogSpy).toHaveBeenCalledWith('No inline comments to add; posting summary review only');
+      // The finding is not silently dropped: it is listed in the review body
+      expect(reviewDataCaptured).toBeTruthy();
+      expect(reviewDataCaptured.body).toContain('could not be attached to the diff');
+      expect(reviewDataCaptured.body).toContain('`not-in-diff.py:10`: Test finding');
     });
   });
 
@@ -1508,6 +1517,10 @@ describe('comment-pr-findings.js', () => {
       expect(reviewDataCaptured).toBeTruthy();
       expect(reviewDataCaptured.comments).toHaveLength(1);
       expect(reviewDataCaptured.comments[0].path).toBe('page2-file.py');
+      // Every gh call is bounded so a hung request can't stall the job
+      for (const call of spawnSyncSpy.mock.calls.filter(c => c[0] === 'gh')) {
+        expect(call[2].timeout).toBe(30000);
+      }
     });
   });
 
@@ -1652,6 +1665,117 @@ describe('comment-pr-findings.js', () => {
       expect(reviewDataCaptured).toBeTruthy();
       expect(reviewDataCaptured.comments).toHaveLength(1);
       expect(reviewDataCaptured.comments[0].body).toContain('Persistent issue');
+    });
+
+    // Shared harness for the dedup cases below: page-aware mocks so a broken
+    // pagination stop condition can't loop forever.
+    async function runWithExistingComments(findings, existingComments, prFiles = [{ filename: 'test.py', patch: '@@ -1,300 +1,300 @@' }]) {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify(findings);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 0, medium_severity: findings.length, low_severity: 0 });
+        }
+      });
+
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        if (cmd === 'gh' && args.includes('api')) {
+          const endpoint = args[1];
+          const method = args[args.indexOf('--method') + 1] || 'GET';
+          const firstPage = !endpoint.includes('page=') || endpoint.includes('&page=1');
+          if (endpoint.includes('/pulls/123/files')) {
+            return { status: 0, stdout: JSON.stringify(firstPage ? prFiles : []), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(firstPage ? existingComments : []), stderr: '' };
+          }
+          if (endpoint.includes('/pulls/123/reviews') && method === 'POST' && options && options.input) {
+            reviewDataCaptured = JSON.parse(options.input);
+          }
+          return { status: 0, stdout: '{}', stderr: '' };
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+      return reviewDataCaptured;
+    }
+
+    function botComment(title, line) {
+      return {
+        path: 'test.py', line, position: 3, user: { type: 'Bot' },
+        body: `🤖 **Code Review Finding: ${title}**\n\n**Severity:** MEDIUM\n`
+      };
+    }
+
+    function finding(title, line) {
+      return { file: 'test.py', line, title, description: title, severity: 'MEDIUM', category: 'correctness' };
+    }
+
+    test('should post a same-title finding at a different line', async () => {
+      const review = await runWithExistingComments(
+        [finding('Missing null check', 10), finding('Missing null check', 200)],
+        [botComment('Missing null check', 10)]
+      );
+
+      expect(review.comments).toHaveLength(1);
+      expect(review.comments[0].line).toBe(200);
+      expect(review.body).toContain('`test.py:10`: Missing null check');
+    });
+
+    test('should dedupe titles that contain bold markers or extra whitespace', async () => {
+      const review = await runWithExistingComments(
+        [finding('Forwarding **kwargs drops keys', 42), finding('  Spaced   title ', 50)],
+        [botComment('Forwarding **kwargs drops keys', 42), botComment('Spaced title', 51)]
+      );
+
+      expect(review.comments ?? []).toHaveLength(0);
+      expect(review.body).toContain('2 previously reported findings still apply');
+    });
+
+    test('should not dedupe against comments from human users', async () => {
+      const humanComment = { ...botComment('Missing null check', 10), user: { type: 'User' } };
+      const review = await runWithExistingComments([finding('Missing null check', 10)], [humanComment]);
+
+      expect(review.comments).toHaveLength(1);
+    });
+
+    test('should post findings when existing comments cannot be fetched', async () => {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify([finding('Missing null check', 10)]);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 0, medium_severity: 1, low_severity: 0 });
+        }
+      });
+      let reviewDataCaptured = null;
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        const endpoint = args[1];
+        const method = args[args.indexOf('--method') + 1] || 'GET';
+        if (endpoint.includes('/pulls/123/files')) {
+          return { status: 0, stdout: JSON.stringify([{ filename: 'test.py', patch: '@@ -1,20 +1,20 @@' }]), stderr: '' };
+        }
+        if (endpoint.includes('/pulls/123/comments') && method === 'GET') {
+          return { status: 1, stdout: '', stderr: 'HTTP 502' };
+        }
+        if (endpoint.includes('/pulls/123/reviews') && method === 'POST' && options && options.input) {
+          reviewDataCaptured = JSON.parse(options.input);
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+
+      expect(reviewDataCaptured.comments).toHaveLength(1);
     });
   });
 });
