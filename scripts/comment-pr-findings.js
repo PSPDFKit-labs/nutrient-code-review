@@ -12,6 +12,8 @@ const PR_SUMMARY_MARKER = '📋 **PR Summary:**';
 
 // Per-call timeout for gh api requests
 const GH_API_TIMEOUT_MS = 30000;
+// Creating a review with many inline comments can legitimately take longer
+const REVIEW_POST_TIMEOUT_MS = 120000;
 
 // Existing threads within this many lines of a finding count as the same finding
 // (lines drift slightly between commits)
@@ -48,7 +50,7 @@ const context = {
 };
 
 // GitHub API helper using gh CLI
-function ghApi(endpoint, method = 'GET', data = null) {
+function ghApi(endpoint, method = 'GET', data = null, timeoutMs = GH_API_TIMEOUT_MS) {
   // Build arguments array safely to prevent command injection
   const args = ['api', endpoint, '--method', method];
   
@@ -62,11 +64,14 @@ function ghApi(endpoint, method = 'GET', data = null) {
       input: data ? JSON.stringify(data) : undefined,
       stdio: ['pipe', 'pipe', 'pipe'],
       // A hung API call must not block the job until its own timeout
-      timeout: GH_API_TIMEOUT_MS
+      timeout: timeoutMs
     });
     
     if (result.error) {
-      throw new Error(`Failed to spawn gh process: ${result.error.message}`);
+      const spawnError = new Error(`Failed to spawn gh process: ${result.error.message}`);
+      // The request may still have been processed by GitHub
+      spawnError.timedOut = result.error.code === 'ETIMEDOUT';
+      throw spawnError;
     }
     
     if (result.status !== 0) {
@@ -237,6 +242,17 @@ function isOwnReview(review) {
 }
 
 // Find an existing review posted by this action
+// Check whether a review with this exact body exists on the current head commit
+function reviewWasCreated(reviewBody) {
+  try {
+    const reviews = ghApiPaginated(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`);
+    return reviews.some(r => r.body === reviewBody && r.commit_id === context.payload.pull_request.head.sha);
+  } catch (error) {
+    console.error('Could not check whether the review was created:', error.message);
+    return false;
+  }
+}
+
 function findExistingReview() {
   try {
     const reviews = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`);
@@ -579,7 +595,7 @@ async function run() {
         reviewData.comments = reviewComments;
       }
 
-      const reviewResponse = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`, 'POST', reviewData);
+      const reviewResponse = ghApi(`/repos/${context.repo.owner}/${context.repo.repo}/pulls/${context.issue.number}/reviews`, 'POST', reviewData, REVIEW_POST_TIMEOUT_MS);
 
       console.log(`Created review with ${reviewComments.length} inline comments`);
       
@@ -589,7 +605,14 @@ async function run() {
       }
     } catch (error) {
       console.error('Error creating review:', error);
-      
+
+      // A timed-out request may still have created the review; posting the
+      // comments individually would then duplicate every one of them.
+      if (error.timedOut && reviewWasCreated(reviewBody)) {
+        console.log('Review request timed out, but the review was created; skipping fallback');
+        return;
+      }
+
       // Fallback: try to create individual comments if review fails
       // This might happen if line numbers are outside the diff context
       console.log('Attempting fallback with adjusted line numbers...');

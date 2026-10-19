@@ -175,6 +175,10 @@ class TestSimpleClaudeRunner:
         # Claude Code's built-in read-only classifier otherwise refuses.
         assert '--allowed-tools' not in cmd
         assert '--allowedTools' not in cmd
+        # Deterministic denial of anything outside the built-in read-only rules
+        assert cmd[cmd.index('--permission-mode') + 1] == 'dontAsk'
+        settings = json.loads(cmd[cmd.index('--settings') + 1])
+        assert settings['permissions']['blockReadsOutsideWorkingDirectories'] is True
         assert '--disallowed-tools' in cmd
         denylist_index = cmd.index('--disallowed-tools') + 1
         assert not any('Bash(' in arg for i, arg in enumerate(cmd) if i != denylist_index)

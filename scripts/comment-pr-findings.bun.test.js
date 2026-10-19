@@ -1517,10 +1517,66 @@ describe('comment-pr-findings.js', () => {
       expect(reviewDataCaptured).toBeTruthy();
       expect(reviewDataCaptured.comments).toHaveLength(1);
       expect(reviewDataCaptured.comments[0].path).toBe('page2-file.py');
-      // Every gh call is bounded so a hung request can't stall the job
+      // Every gh call is bounded so a hung request can't stall the job;
+      // creating the review gets more time than other calls
       for (const call of spawnSyncSpy.mock.calls.filter(c => c[0] === 'gh')) {
-        expect(call[2].timeout).toBe(30000);
+        const isReviewPost = call[1][1].endsWith('/reviews') && call[1].includes('POST');
+        expect(call[2].timeout).toBe(isReviewPost ? 120000 : 30000);
       }
+    });
+  });
+
+  describe('Review creation timeout', () => {
+    async function runWithTimedOutReview(reviewsAfterTimeout) {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return JSON.stringify([{ file: 'test.py', line: 5, title: 'Bug', description: 'd', severity: 'MEDIUM', category: 'correctness' }]);
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 0, medium_severity: 1, low_severity: 0 });
+        }
+      });
+
+      let postedReviewBody = null;
+      const individualCommentPosts = [];
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        const endpoint = args[1];
+        const method = args[args.indexOf('--method') + 1] || 'GET';
+        const firstPage = !endpoint.includes('page=') || endpoint.includes('&page=1');
+        if (endpoint.includes('/pulls/123/files')) {
+          return { status: 0, stdout: JSON.stringify(firstPage ? [{ filename: 'test.py', patch: '@@ -1,10 +1,10 @@' }] : []), stderr: '' };
+        }
+        if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+          postedReviewBody = JSON.parse(options.input).body;
+          return { status: null, stdout: '', stderr: '', error: Object.assign(new Error('spawnSync gh ETIMEDOUT'), { code: 'ETIMEDOUT' }) };
+        }
+        if (endpoint.includes('/pulls/123/reviews') && method === 'GET') {
+          const reviews = firstPage ? reviewsAfterTimeout(postedReviewBody) : [];
+          return { status: 0, stdout: JSON.stringify(reviews), stderr: '' };
+        }
+        if (endpoint.includes('/pulls/123/comments') && method === 'POST') {
+          individualCommentPosts.push(JSON.parse(options.input));
+          return { status: 0, stdout: '{"id": 1}', stderr: '' };
+        }
+        return { status: 0, stdout: '[]', stderr: '' };
+      });
+
+      await import('./comment-pr-findings.js');
+      return individualCommentPosts;
+    }
+
+    test('should not re-post comments when the timed-out review was created', async () => {
+      const posts = await runWithTimedOutReview(body => (body ? [{ id: 9, body, commit_id: 'abc123' }] : []));
+      expect(posts).toHaveLength(0);
+    });
+
+    test('should fall back to individual comments when the review was not created', async () => {
+      const posts = await runWithTimedOutReview(() => []);
+      expect(posts).toHaveLength(1);
+      expect(posts[0].path).toBe('test.py');
     });
   });
 

@@ -106,7 +106,7 @@ Comment-triggered reviews run with access to your secrets even on pull requests 
 This action also limits what a prompt-injected review could do:
 - The review runs with only the environment variables Claude Code needs and a fresh home directory. Apart from the Claude API key, it never sees `GITHUB_TOKEN`, Actions runtime tokens or other job secrets.
 - Credentials that `actions/checkout` stored in the checkout's git config are hidden while the review runs and restored afterwards.
-- Shell access follows Claude Code's built-in read-only rules: plain `git diff`, `log`, `show`, `blame` and `status` work, while commands that write files, run programs or read outside the checkout are refused. Network tools and file-editing tools are blocked as well.
+- Claude Code runs in `dontAsk` permission mode, so only its built-in read-only rules apply: plain `git diff`, `log`, `show`, `blame` and `status` and file reads inside the checkout work, while everything else is refused, including commands that write files, run programs or read outside the checkout. Network and file-editing tools are blocked as well.
 - The Claude Code CLI is pinned (`claude-code-version`), because its rules are part of this boundary.
 - Known secret values are redacted from the results.
 - The review prompt tells Claude to treat instructions found in PR content as data, and to report manipulation attempts in the PR as findings.

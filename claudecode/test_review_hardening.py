@@ -430,3 +430,31 @@ class TestReadFileAppliesWindow:
         with patch.object(client, '_read_file', return_value=(True, 'content', '')) as read:
             client._generate_single_finding_prompt({'file': 'a.py', 'line': 77, 'title': 't'})
         read.assert_called_once_with('a.py', focus_line=77)
+
+
+class TestExcludedFilesDoNotMarkDiffPartial:
+    @patch('requests.get')
+    def test_excluded_files_count_as_fetched(self, mock_get):
+        pr_response = Mock()
+        pr_response.json.return_value = {
+            'number': 1, 'title': 'PR', 'body': '', 'user': {'login': 'u'},
+            'created_at': '2024-01-01T00:00:00Z', 'updated_at': '2024-01-01T00:00:00Z',
+            'state': 'open',
+            'head': {'ref': 'f', 'sha': 'a', 'repo': {'full_name': 'o/r'}},
+            'base': {'ref': 'main', 'sha': 'b'},
+            'additions': 2, 'deletions': 0, 'changed_files': 2,
+        }
+        page = Mock()
+        page.json.return_value = [
+            {'filename': 'node_modules/lib/index.js', 'status': 'modified', 'additions': 1,
+             'deletions': 0, 'changes': 1, 'patch': '+x'},
+            {'filename': 'app.py', 'status': 'modified', 'additions': 1,
+             'deletions': 0, 'changes': 1, 'patch': '+y'},
+        ]
+        mock_get.side_effect = [pr_response, page]
+
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'test-token'}):
+            result = GitHubActionClient().get_pr_data('o/r', 1, max_diff_chars=800000)
+
+        assert result['diff_stats']['included_file_list'] == ['app.py']
+        assert result['is_truncated'] is False

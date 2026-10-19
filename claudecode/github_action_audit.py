@@ -200,6 +200,7 @@ class GitHubActionClient:
         files_with_patches = 0
         is_truncated = False
         fetched_files = []
+        files_returned_by_api = 0  # includes excluded files, for the completeness check
         included_files = []  # Track which files made it into the diff
 
         # Fetch files page-by-page, building diff incrementally
@@ -220,6 +221,7 @@ class GitHubActionClient:
                     break
 
                 # Process each file in this page
+                files_returned_by_api += len(files_data)
                 for file_data in files_data:
                     filename = file_data['filename']
 
@@ -290,9 +292,9 @@ class GitHubActionClient:
         # Files that were never fetched (a failed page, or GitHub's file-list
         # cap) are missing from the diff even if the budget wasn't exhausted,
         # so the prompt must not claim the diff is complete.
-        if len(fetched_files) < total_files_in_pr and not is_truncated:
+        if files_returned_by_api < total_files_in_pr and not is_truncated:
             is_truncated = True
-            logger.warning(f"Only {len(fetched_files)} of {total_files_in_pr} files could be fetched; "
+            logger.warning(f"Only {files_returned_by_api} of {total_files_in_pr} files could be fetched; "
                            "treating the diff as partial")
 
         pr_diff = '\n'.join(diff_sections)
@@ -610,16 +612,19 @@ class SimpleClaudeRunner:
             # permissions, plugins) and .mcp.json servers: a PR must not be able
             # to run commands in the review process.
             #
-            # Tool hardening: no Bash allow rules are passed on purpose. Claude
-            # Code's built-in read-only classifier already auto-approves plain
-            # git diff/log/show/blame/status and file reads inside the checkout,
-            # and refuses (headless: denies) risky variants such as
-            # `git log --output=<file>`, `git blame --contents=<file>`,
-            # `--ext-diff` and reads outside the working directory. A
-            # `Bash(git log:*)` prefix rule would approve those variants too,
-            # turning a prompt injection into arbitrary file writes and command
-            # execution. The denylist below additionally blocks network tools,
-            # process listings and file-modifying tools.
+            # Tool hardening. The permission mode is pinned to dontAsk: anything
+            # not covered by Claude Code's built-in read-only rules is denied
+            # outright, deterministically. (Without it, newer CLIs may default to
+            # auto mode, where a server-side classifier decides and reads outside
+            # the checkout are allowed.) The built-in rules allow plain git
+            # diff/log/show/blame/status and reads inside the checkout, and deny
+            # risky variants such as `git log --output=<file>`,
+            # `git blame --contents=<file>`, `--ext-diff` and `env`. No Bash
+            # allow rules are passed on purpose: a `Bash(git log:*)` prefix rule
+            # would approve those variants too. Reads outside the working
+            # directory are additionally blocked by setting, and tools a review
+            # never needs (network, file edits, worktrees, scheduling,
+            # workflows) are denied.
             disallowed_tools = ','.join([
                 'Bash(ps:*)',
                 'Bash(curl:*)',
@@ -630,13 +635,25 @@ class SimpleClaudeRunner:
                 'Write',
                 'Edit',
                 'NotebookEdit',
+                'EnterWorktree',
+                'ExitWorktree',
+                'CronCreate',
+                'CronDelete',
+                'ScheduleWakeup',
+                'Workflow',
+                'RemoteTrigger',
             ])
+            permission_settings = json.dumps({
+                'permissions': {'blockReadsOutsideWorkingDirectories': True}
+            })
             cmd = [
                 'claude',
                 '--output-format', 'json',
                 '--model', DEFAULT_CLAUDE_MODEL,
                 '--setting-sources', 'user',
                 '--strict-mcp-config',
+                '--permission-mode', 'dontAsk',
+                '--settings', permission_settings,
                 '--disallowed-tools', disallowed_tools,
                 '--json-schema', json.dumps(REVIEW_OUTPUT_SCHEMA)
             ]
