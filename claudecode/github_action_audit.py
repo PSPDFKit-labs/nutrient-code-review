@@ -1236,6 +1236,7 @@ def main():
                 # validation failure), so the prompt never promises a
                 # validation stage that won't run.
                 downstream_filter_enabled=findings_filter.use_claude_filtering,
+                include_merge_risk=os.environ.get('MERGE_RISK', 'false').lower() == 'true',
             )
             return claude_runner.run_code_review(repo_dir, prompt_text), len(prompt_text)
 

@@ -193,6 +193,19 @@ diff --git a/emoji.py b/emoji.py
         assert "PR SUMMARY GUIDELINES:" in prompt
         assert "2-4 sentences" in prompt
         assert "~10 words" in prompt
+
+    def test_get_unified_review_prompt_omits_merge_risk_by_default(self):
+        prompt = get_unified_review_prompt(_sample_pr_data(), pr_diff="diff")
+
+        assert '"merge_risk"' not in prompt
+        assert "MERGE RISK GUIDELINES:" not in prompt
+
+    def test_get_unified_review_prompt_includes_merge_risk_when_enabled(self):
+        prompt = get_unified_review_prompt(_sample_pr_data(), pr_diff="diff", include_merge_risk=True)
+
+        assert '"merge_risk"' in prompt
+        assert '"level": "LOW|MEDIUM|HIGH"' in prompt
+        assert "MERGE RISK GUIDELINES:" in prompt
     def test_get_unified_review_prompt_treats_pr_content_as_untrusted(self):
         prompt = get_unified_review_prompt(_sample_pr_data(), "diff")
 
