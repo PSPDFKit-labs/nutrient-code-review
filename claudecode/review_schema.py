@@ -19,6 +19,15 @@ REVIEW_OUTPUT_SCHEMA = {
                         },
                         "required": ["label", "files", "changes"]
                     }
+                },
+                # Only requested when the merge-risk input is enabled.
+                "merge_risk": {
+                    "type": "object",
+                    "properties": {
+                        "level": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]},
+                        "reasons": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["level", "reasons"]
                 }
             },
             "required": ["overview", "file_changes"]

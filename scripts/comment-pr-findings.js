@@ -27,6 +27,11 @@ const BOT_COMMENT_MARKER = '🤖 **Code Review Finding: ';
 const REVIEW_MODE = (process.env.REVIEW_MODE || 'approve-reject').toLowerCase();
 const COMMENT_ONLY_MODE = REVIEW_MODE === 'comment-only';
 
+// Merge risk rating: shown in the summary and set as a merge-risk:<level> label when enabled
+const MERGE_RISK_ENABLED = (process.env.MERGE_RISK || 'false').toLowerCase() === 'true';
+const MERGE_RISK_LEVELS = ['LOW', 'MEDIUM', 'HIGH'];
+const MERGE_RISK_LABEL_PREFIX = 'merge-risk:';
+
 // Parse GitHub context from environment
 const eventData = process.env.GITHUB_EVENT_PATH ? JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')) : {};
 const context = {
@@ -315,11 +320,62 @@ function dismissReview(reviewId, message) {
   }
 }
 
+// Return the validated merge risk from the PR summary, or null when disabled or malformed
+function getMergeRisk(prSummary) {
+  if (!MERGE_RISK_ENABLED || !prSummary || typeof prSummary.merge_risk !== 'object' || !prSummary.merge_risk) {
+    return null;
+  }
+  const level = String(prSummary.merge_risk.level || '').toUpperCase();
+  if (!MERGE_RISK_LEVELS.includes(level)) {
+    return null;
+  }
+  const reasons = Array.isArray(prSummary.merge_risk.reasons)
+    ? prSummary.merge_risk.reasons.filter(r => typeof r === 'string' && r.trim()).slice(0, 3)
+    : [];
+  return { level, reasons };
+}
+
+function formatMergeRisk(mergeRisk) {
+  const level = mergeRisk.level.charAt(0) + mergeRisk.level.slice(1).toLowerCase();
+  let result = `**Merge risk:** ${level}\n`;
+  for (const reason of mergeRisk.reasons) {
+    result += `- ${reason}\n`;
+  }
+  return result + '\n';
+}
+
+// Replace any existing merge-risk:* label with the one for the current rating.
+// Labels are advisory, so failures are logged and never fail the review.
+function applyMergeRiskLabel(mergeRisk) {
+  const issueEndpoint = `/repos/${context.repo.owner}/${context.repo.repo}/issues/${context.issue.number}/labels`;
+  const wanted = `${MERGE_RISK_LABEL_PREFIX}${mergeRisk.level.toLowerCase()}`;
+  try {
+    const current = ghApi(issueEndpoint) || [];
+    const names = Array.isArray(current) ? current.map(l => l.name) : [];
+    for (const name of names) {
+      if (name.startsWith(MERGE_RISK_LABEL_PREFIX) && name !== wanted) {
+        ghApi(`${issueEndpoint}/${encodeURIComponent(name)}`, 'DELETE');
+      }
+    }
+    if (!names.includes(wanted)) {
+      ghApi(issueEndpoint, 'POST', { labels: [wanted] });
+    }
+    console.log(`Set merge risk label ${wanted}`);
+  } catch (error) {
+    console.error(`Could not set merge risk label ${wanted}:`, error.message);
+  }
+}
+
 // Format PR summary object into markdown
 function formatPrSummary(prSummary, filesReviewed) {
   if (!prSummary || !prSummary.overview) return '';
 
   let result = `${PR_SUMMARY_MARKER}\n${prSummary.overview}\n\n`;
+
+  const mergeRisk = getMergeRisk(prSummary);
+  if (mergeRisk) {
+    result += formatMergeRisk(mergeRisk);
+  }
 
   if (prSummary.file_changes && prSummary.file_changes.length > 0) {
     // Build collapsible table with files_reviewed count
@@ -366,6 +422,11 @@ async function run() {
     } catch (e) {
       console.log('Could not read analysis summary file');
       return;
+    }
+
+    const mergeRisk = getMergeRisk(prSummary);
+    if (mergeRisk) {
+      applyMergeRiskLabel(mergeRisk);
     }
 
     function buildReviewSummary(findings, prSummaryObj, analysisSummaryObj) {

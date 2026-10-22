@@ -371,6 +371,81 @@ describe('comment-pr-findings.js', () => {
     });
   });
 
+  describe('Merge Risk', () => {
+    function setupMergeRiskMocks(mergeRisk, existingLabels) {
+      readFileSyncSpy.mockImplementation((path) => {
+        if (path.includes('github-event.json')) {
+          return JSON.stringify({ pull_request: { number: 123, head: { sha: 'abc123' } } });
+        }
+        if (path === 'findings.json') {
+          return '[]';
+        }
+        if (path === 'pr-summary.json') {
+          return JSON.stringify({ overview: 'Changes the text extractor.', file_changes: [], merge_risk: mergeRisk });
+        }
+        if (path === 'analysis-summary.json') {
+          return JSON.stringify({ files_reviewed: 1, high_severity: 0, medium_severity: 0, low_severity: 0 });
+        }
+      });
+
+      const calls = { review: null, labelRequests: [] };
+      spawnSyncSpy.mockImplementation((cmd, args, options) => {
+        const endpoint = args[1];
+        const method = args[args.indexOf('--method') + 1] || 'GET';
+        if (endpoint.includes('/issues/123/labels')) {
+          calls.labelRequests.push({ endpoint, method, data: options && options.input ? JSON.parse(options.input) : null });
+          if (method === 'GET') {
+            return { status: 0, stdout: JSON.stringify(existingLabels.map(name => ({ name }))), stderr: '' };
+          }
+          return { status: 0, stdout: '[]', stderr: '' };
+        }
+        if (endpoint.includes('/pulls/123/reviews') && method === 'POST') {
+          calls.review = JSON.parse(options.input);
+        }
+        return { status: 0, stdout: '{}', stderr: '' };
+      });
+      return calls;
+    }
+
+    test('should show merge risk and replace the old label when enabled', async () => {
+      process.env.MERGE_RISK = 'true';
+      const calls = setupMergeRiskMocks(
+        { level: 'HIGH', reasons: ['Touches the shared text extractor used by every SDK.'] },
+        ['merge-risk:low', 'bug']
+      );
+
+      await import('./comment-pr-findings.js');
+
+      expect(calls.review.body).toContain('**Merge risk:** High');
+      expect(calls.review.body).toContain('- Touches the shared text extractor used by every SDK.');
+      const deletes = calls.labelRequests.filter(r => r.method === 'DELETE');
+      expect(deletes).toHaveLength(1);
+      expect(deletes[0].endpoint).toContain(encodeURIComponent('merge-risk:low'));
+      const posts = calls.labelRequests.filter(r => r.method === 'POST');
+      expect(posts).toHaveLength(1);
+      expect(posts[0].data).toEqual({ labels: ['merge-risk:high'] });
+    });
+
+    test('should ignore merge risk when disabled', async () => {
+      const calls = setupMergeRiskMocks({ level: 'HIGH', reasons: ['Anything.'] }, []);
+
+      await import('./comment-pr-findings.js');
+
+      expect(calls.review.body).not.toContain('Merge risk');
+      expect(calls.labelRequests).toHaveLength(0);
+    });
+
+    test('should ignore an invalid merge risk level', async () => {
+      process.env.MERGE_RISK = 'true';
+      const calls = setupMergeRiskMocks({ level: 'SEVERE', reasons: ['Anything.'] }, []);
+
+      await import('./comment-pr-findings.js');
+
+      expect(calls.review.body).not.toContain('Merge risk');
+      expect(calls.labelRequests).toHaveLength(0);
+    });
+  });
+
   describe('Autofix Suggestions', () => {
     test('should generate correct pickle.loads autofix', async () => {
 

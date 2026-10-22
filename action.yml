@@ -161,6 +161,11 @@ inputs:
     required: false
     default: 'approve-reject'
 
+  merge-risk:
+    description: 'Rate how risky each reviewed PR is to merge (LOW, MEDIUM or HIGH), show the rating and its reasons in the review summary, and set a matching merge-risk:low, merge-risk:medium or merge-risk:high label. Advisory only. The token needs permission to edit PR labels.'
+    required: false
+    default: 'false'
+
 outputs:
   findings-count:
     description: 'Number of code review findings'
@@ -547,6 +552,7 @@ runs:
         CLAUDECODE_TIMEOUT: ${{ inputs.claudecode-timeout }}
         MAX_DIFF_CHARS: ${{ inputs.max-diff-chars }}
         MAX_DIFF_LINES: ${{ inputs.max-diff-lines }}
+        MERGE_RISK: ${{ inputs.merge-risk }}
         ACTION_PATH: ${{ steps.action-files.outputs.dir }}
       run: |
         echo "Running ClaudeCode AI code review analysis..."
@@ -728,6 +734,7 @@ runs:
         ACTION_PATH: ${{ steps.action-files.outputs.dir }}
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.pr-info.outputs.pr_sha }}
         REVIEW_MODE: ${{ inputs.review-mode }}
+        MERGE_RISK: ${{ inputs.merge-risk }}
       run: |
         node "$ACTION_PATH/scripts/comment-pr-findings.js"
 

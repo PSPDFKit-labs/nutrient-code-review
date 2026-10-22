@@ -122,6 +122,7 @@ These measures raise the bar but are not a sandbox and cannot eliminate prompt-i
 | `claude-api-key` | Anthropic Claude API key for code review analysis. <br>*Note*: This API key needs to be enabled for both the Claude API and Claude Code usage. | None | Yes |
 | `comment-pr` | Whether to comment on PRs with findings | `true` | No |
 | `review-mode` | How to post the review on the PR. `approve-reject` submits an `APPROVE` or `REQUEST_CHANGES` verdict based on findings; `comment-only` posts the same inline comments and summary as a non-blocking `COMMENT` review with no verdict. | `approve-reject` | No |
+| `merge-risk` | Rate how risky each reviewed PR is to merge (`LOW`, `MEDIUM` or `HIGH`), show the rating and its reasons in the review summary, and set a matching `merge-risk:low`, `merge-risk:medium` or `merge-risk:high` label, replacing any earlier one. Advisory only. The token needs permission to edit PR labels. | `false` | No |
 | `upload-results` | Whether to upload results as artifacts | `true` | No |
 | `exclude-directories` | Comma-separated list of directories to exclude from scanning | None | No |
 | `claude-model` | Claude [model name](https://docs.anthropic.com/en/docs/about-claude/models/overview#model-names) to use. Defaults to Opus 5.5 (1M context). For very large PRs or to reduce cost, consider `claude-sonnet-5-5` (also 1M context, faster and cheaper). | `claude-opus-5-5` | No |

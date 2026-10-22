@@ -85,6 +85,7 @@ def get_unified_review_prompt(
     diff_metadata=None,
     repository_guidelines=None,
     downstream_filter_enabled=False,
+    include_merge_risk=False,
 ):
     """Generate unified code review + security prompt for Claude Code.
 
@@ -103,6 +104,7 @@ def get_unified_review_prompt(
         downstream_filter_enabled: Whether a downstream (Claude API) false-positive
             filter will validate findings - calibrates how borderline findings
             should be reported
+        include_merge_risk: Whether to ask for a merge risk rating in pr_summary
 
     Returns:
         Formatted prompt string
@@ -110,6 +112,29 @@ def get_unified_review_prompt(
 
     files_changed = _format_files_changed(pr_data)
     diff_section = _build_diff_section(pr_diff, include_diff, diff_metadata)
+
+    merge_risk_schema = ""
+    merge_risk_guidelines = ""
+    if include_merge_risk:
+        merge_risk_schema = """,
+    "merge_risk": {
+      "level": "LOW|MEDIUM|HIGH",
+      "reasons": ["One short sentence per reason, 1-3 reasons"]
+    }"""
+        merge_risk_guidelines = """
+MERGE RISK GUIDELINES:
+- merge_risk rates how much damage this PR could do if it merges with an undetected problem,
+  and how hard that damage would be to undo. It is independent of the findings: a PR with
+  no findings can still be HIGH risk.
+- LOW: narrow, easily reverted changes such as docs, tests, isolated UI, or internal tooling
+- MEDIUM: behavior changes in one product or area, covered by tests or easy to revert
+- HIGH: changes to shared foundations many consumers depend on, public API or file formats,
+  persisted data or migrations, auth, billing, security-sensitive code, release or CI
+  infrastructure, or behavior changes without tests that exercise them
+- reasons: 1-3 short sentences naming what drives the rating and what a reviewer should check
+- Use repository-specific review instructions, when provided, to judge which areas are shared
+  or customer-critical
+"""
 
     custom_review_section = ""
     if custom_review_instructions:
@@ -319,7 +344,7 @@ You MUST output your findings as structured JSON with this exact schema:
         "files": ["tests/test_auth.py", "tests/test_login.py"],
         "changes": "Unit tests for authentication"
       }}
-    ]
+    ]{merge_risk_schema}
   }},
   "findings": [
     {{
@@ -346,7 +371,7 @@ PR SUMMARY GUIDELINES:
   - files: Array of actual file paths covered by this entry (used for counting)
   - changes: Brief description (~10 words), focus on purpose not implementation
   - Group related files when it improves readability (e.g., test files, config files)
-
+{merge_risk_guidelines}
 SUGGESTION GUIDELINES:
 - Only include `suggestion` if you can provide exact, working replacement code
 - For single-line fixes: set suggestion_start_line = suggestion_end_line = the line number
